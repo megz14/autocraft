@@ -15,6 +15,7 @@ import requests
 import tokenizers
 import torch
 import transformers
+import h5py
 
 import utils
 
@@ -299,6 +300,51 @@ def _group_texts(examples, block_size, bos, eos):
   result['attention_mask'] = _attn_masks
   return result
 
+
+def load_from_h5(path,
+                 coords_key='coords',
+                 class_key='classes',
+                 max_length=None,
+                 pad_value=0):
+    """
+    Loads occupied voxel coordinates and class IDs from an HDF5 file.
+
+    Args:
+      path: Path to the .h5 file.
+      coords_key: Dataset name storing (N, 3) coordinates.
+      class_key: Dataset name storing (N,) class IDs.
+      max_length: Optional length to pad or truncate sequences to.
+      pad_value: Token value to use for padding.
+
+    Returns:
+      coords: FloatTensor of shape (L, 3) (padded if max_length given).
+      classes: LongTensor of shape (L,) matching coords.
+      valid_mask: BoolTensor of shape (L,) indicating real entries.
+    """
+    with h5py.File(path, 'r') as f:
+        coords = np.asarray(f[coords_key])    # shape (N, 3)
+        classes = np.asarray(f[class_key])    # shape (N,)
+
+    if max_length is None:
+        L = coords.shape[0]
+    else:
+        L = max_length
+        coords = coords[:L]
+        classes = classes[:L]
+
+    valid_len = coords.shape[0]
+    if max_length is not None and valid_len < max_length:
+        pad_coords = np.zeros((max_length - valid_len, 3), dtype=coords.dtype)
+        pad_classes = np.full((max_length - valid_len,), pad_value, dtype=classes.dtype)
+        coords = np.concatenate([coords, pad_coords], axis=0)
+        classes = np.concatenate([classes, pad_classes], axis=0)
+
+    coords = torch.tensor(coords, dtype=torch.float32)
+    classes = torch.tensor(classes, dtype=torch.long)
+    valid_mask = torch.zeros(L, dtype=torch.bool)
+    valid_mask[:valid_len] = True
+
+    return coords, classes, valid_mask
 
 def get_dataset(
     dataset_name, tokenizer, wrap, mode, cache_dir,
@@ -704,3 +750,10 @@ class FaultTolerantDistributedSampler(torch.utils.data.DistributedSampler):
       yield index
 
     self.counter = 0
+  
+
+load_from_h5(path,
+                 coords_key='coords',
+                 class_key='classes',
+                 max_length=None,
+                 pad_value=0)
