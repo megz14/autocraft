@@ -203,3 +203,6 @@ def main(config):
 
 if __name__ == '__main__':
   main()
+  
+  # [(x,y,z,c) x n ]
+  

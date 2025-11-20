@@ -18,6 +18,7 @@ import transformers
 import h5py
 
 import utils
+from utils.craft3d_dataset import Craft3DDataset
 
 LOGGER = utils.get_logger(__name__)
 
@@ -586,16 +587,27 @@ def get_dataloaders(config, tokenizer, skip_train=False,
     raise ValueError(
       f'Eval Batch Size for {config.eval.batch_size} '
       f'not divisible by {num_gpus}.')
+  data_type = getattr(config.data, "type", "default")
+
   if skip_train:
     train_set = None
   else:
-    train_set = get_dataset(
-      config.data.train,
-      tokenizer,
-      mode='train',
-      wrap=config.data.wrap,
-      cache_dir=config.data.cache_dir,
-      block_size=config.model.length)
+    if data_type == "craft3d":
+      train_set = Craft3DSequenceDataset(
+        data_dir=config.data.craft3d_dir,
+        split=getattr(config.data, "train_split", "train"),
+        seq_len=config.model.length,
+        pad_token_id=_get_pad_token_id(tokenizer),
+        max_samples=getattr(config.data, "max_train_samples", None),
+      )
+    else:
+      train_set = get_dataset(
+        config.data.train,
+        tokenizer,
+        mode='train',
+        wrap=config.data.wrap,
+        cache_dir=config.data.cache_dir,
+        block_size=config.model.length)
   
   if config.data.valid in ['text8', 'lm1b', 'ag_news']:
     validation_split = 'test'
@@ -604,14 +616,23 @@ def get_dataloaders(config, tokenizer, skip_train=False,
   if skip_valid:
     valid_set = None
   else:
-    valid_set = get_dataset(
-      config.data.valid,
-      tokenizer,
-      wrap=config.data.wrap,
-      mode=validation_split,
-      cache_dir=config.data.cache_dir,
-      block_size=config.model.length,
-      streaming=False)
+    if data_type == "craft3d":
+      valid_set = Craft3DSequenceDataset(
+        data_dir=config.data.craft3d_dir,
+        split=getattr(config.data, "valid_split", "val"),
+        seq_len=config.model.length,
+        pad_token_id=_get_pad_token_id(tokenizer),
+        max_samples=getattr(config.data, "max_valid_samples", None),
+      )
+    else:
+      valid_set = get_dataset(
+        config.data.valid,
+        tokenizer,
+        wrap=config.data.wrap,
+        mode=validation_split,
+        cache_dir=config.data.cache_dir,
+        block_size=config.model.length,
+        streaming=False)
 
   if skip_train:
     train_loader = None
@@ -644,6 +665,51 @@ def get_dataloaders(config, tokenizer, skip_train=False,
     valid_loader.tokenizer = tokenizer
 
   return train_loader, valid_loader
+
+
+def _get_pad_token_id(tokenizer):
+  if tokenizer is None:
+    return 0
+  if tokenizer.pad_token_id is not None:
+    return tokenizer.pad_token_id
+  if tokenizer.eos_token_id is not None:
+    return tokenizer.eos_token_id
+  return 0
+
+
+class Craft3DSequenceDataset(torch.utils.data.Dataset):
+  def __init__(self, data_dir, split, seq_len, pad_token_id=0, max_samples=None):
+    self.dataset = Craft3DDataset(
+      data_dir=data_dir,
+      subset=split,
+      max_samples=max_samples,
+    )
+    self.seq_len = seq_len
+    self.pad_token_id = pad_token_id
+
+  def __len__(self):
+    return self.dataset.get_num_houses()
+
+  def __getitem__(self, idx):
+    annotation = self.dataset.get_house(idx)
+    block_types = annotation[:, 0]
+    coords = annotation[:, 1:].float()
+
+    length = min(len(block_types), self.seq_len)
+    tokens = torch.full((self.seq_len,), self.pad_token_id, dtype=torch.long)
+    coords_tensor = torch.zeros((self.seq_len, 3), dtype=torch.float32)
+    attn_mask = torch.zeros((self.seq_len,), dtype=torch.long)
+
+    if length > 0:
+      tokens[:length] = block_types[:length]
+      coords_tensor[:length] = coords[:length]
+      attn_mask[:length] = 1
+
+    return {
+      "input_ids": tokens,
+      "attention_mask": attn_mask,
+      "coords": coords_tensor,
+    }
 
 
 # Samplers adapted from: https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/fault_tolerant_sampler.py
