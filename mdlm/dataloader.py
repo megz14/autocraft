@@ -18,7 +18,7 @@ import transformers
 import h5py
 
 import utils
-from utils.craft3d_dataset import Craft3DDataset
+from helper.craft3d_dataset import Craft3DDataset
 
 LOGGER = utils.get_logger(__name__)
 
