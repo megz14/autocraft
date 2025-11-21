@@ -818,8 +818,3 @@ class FaultTolerantDistributedSampler(torch.utils.data.DistributedSampler):
     self.counter = 0
   
 
-load_from_h5(path,
-                 coords_key='coords',
-                 class_key='classes',
-                 max_length=None,
-                 pad_value=0)
