@@ -165,7 +165,6 @@ class TimestepEmbedder(nn.Module):
     """
     Create sinusoidal timestep embeddings.
     :param t: a 1-D Tensor of N indices, one per batch element.
-                      These may be fractional.
     :param dim: the dimension of the output.
     :param max_period: controls the minimum frequency of the embeddings.
     :return: an (N, D) Tensor of positional embeddings.
@@ -389,7 +388,7 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     self.sigma_map = TimestepEmbedder(config.model.cond_dim)
     self.rotary_emb = Rotary(
       config.model.hidden_size // config.model.n_heads)
-    self.pos_emb_3d = SinusoidalPositionalEmbedding3D(
+    self.pos_emb_3d = PositionalEncoding3D(
       config.model.hidden_size)
 
     blocks = []
