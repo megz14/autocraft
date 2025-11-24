@@ -382,7 +382,7 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
 
     self.config = config
     self.vocab_size = vocab_size
-
+    self.coords = None
     self.vocab_embed = EmbeddingLayer(config.model.hidden_size,
                                       vocab_size)
     self.sigma_map = TimestepEmbedder(config.model.cond_dim)
@@ -410,12 +410,14 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
       return bias_dropout_add_scale_fused_train
     else:
       return  bias_dropout_add_scale_fused_inference
-
-  def forward(self, indices, sigma, coords):
+  def forward(self, indices, sigma, coords=None):
     # coords shape (batch_size, seq_len, 3)
     # indices shape (batch_size, seq_len)
+    if coords is not None:
+        self.coords = coords
+
     x = self.vocab_embed(indices) # shape (batch_size, seq_len, hidden_size)
-    pos_emb = self.pos_emb_3d(coords).to(x.dtype) # shape (batch_size, seq_len, hidden_size)
+    pos_emb = self.pos_emb_3d(self.coords).to(x.dtype) # shape (batch_size, seq_len, hidden_size)
     x = x + pos_emb
     c = F.silu(self.sigma_map(sigma))
 

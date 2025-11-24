@@ -309,14 +309,11 @@ class Diffusion(L.LightningModule):
     assert sigma.ndim == 1, sigma.shape
     return sigma
 
-  def forward(self, x, sigma, coords=None):
+  def forward(self, x, sigma,coords=None):
     """Returns log score."""
     sigma = self._process_sigma(sigma)
     with torch.cuda.amp.autocast(dtype=torch.float32):
-        if (coords is not None and getattr(self.config, 'backbone', None) == 'dit'):
-            logits = self.backbone(x, sigma, coords)
-        else:
-            logits = self.backbone(x, sigma)
+        logits = self.backbone(x, sigma,coords)
     
     if self.parameterization == 'subs':
       return self._subs_parameterization(logits=logits,
@@ -837,18 +834,18 @@ class Diffusion(L.LightningModule):
       new_attention_mask = attention_mask
     return input_tokens, output_tokens, new_attention_mask
 
-  def _reconstruction_loss(self, x0, coords):
+  def _reconstruction_loss(self, x0):
     t0 = torch.zeros(x0.shape[0], dtype=self.dtype,
                      device=self.device)
     assert self.config.noise.type == 'loglinear'
     # The above assert is for d3pm parameterization
     unet_conditioning = self.noise(t0)[0][:, None]
-    model_output_t0 = self.forward(x0, unet_conditioning, coords)
+    model_output_t0 = self.forward(x0, unet_conditioning)
     return - torch.gather(input=model_output_t0,
                           dim=-1,
                           index=x0[:, :, None]).squeeze(-1)
 
-  def _forward_pass_diffusion(self, x0, coords=None):
+  def _forward_pass_diffusion(self, x0,coords=None):
     t = self._sample_t(x0.shape[0], x0.device)
     if self.T > 0:
       t = (t * self.T).to(torch.int)
@@ -868,7 +865,7 @@ class Diffusion(L.LightningModule):
       move_chance = 1 - torch.exp(-sigma[:, None])
 
     xt = self.q_xt(x0, move_chance)
-    model_output = self.forward(xt, unet_conditioning, coords=coords)
+    model_output = self.forward(xt, unet_conditioning,coords=coords)
     utils.print_nans(model_output, 'model_output')
 
     if self.parameterization == 'sedd':
@@ -879,7 +876,7 @@ class Diffusion(L.LightningModule):
       diffusion_loss = self._d3pm_loss(
         model_output=model_output, xt=xt, x0=x0, t=t)
       if self.parameterization == 'd3pm':
-        reconstruction_loss = self._reconstruction_loss(x0, coords=coords)
+        reconstruction_loss = self._reconstruction_loss(x0)
       elif self.parameterization == 'subs':
         reconstruction_loss = 0
       return reconstruction_loss + diffusion_loss
@@ -897,17 +894,17 @@ class Diffusion(L.LightningModule):
     return - log_p_theta * (
       dsigma / torch.expm1(sigma))[:, None]
 
-  def _loss(self, x0, attention_mask, coords):
+  def _loss(self, x0, attention_mask,coords=None):
     (input_tokens, output_tokens,
      attention_mask) = self._maybe_sub_sample(
        x0, attention_mask)
 
     if self.parameterization == 'ar':
-      logprobs = self.backbone(input_tokens, None)
+      logprobs = self.backbone(input_tokens, None,coords=coords)
       loss = - logprobs.gather(
         -1, output_tokens[:, :, None])[:, :, 0]
     else:
-      loss = self._forward_pass_diffusion(input_tokens, coords=coords)
+      loss = self._forward_pass_diffusion(input_tokens,coords=coords)
     
     nlls = loss * attention_mask
     count = attention_mask.sum()
