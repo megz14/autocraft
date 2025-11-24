@@ -1,0 +1,11 @@
+python main.py \
+  mode=train \
+  +data.type=craft3d \
+  +data.craft3d_dir=dataset/3dcraft \
+  +data.train_split=train \
+  +data.valid_split=val \
+  model.length=4096 \
+  loader.global_batch_size=64
+
+
+python main.py   mode=train   +data.type=craft3d   +data.craft3d_dir=/workspace/autocraft/autocraft/mdlm/dataset/3dcraft   +data.train_split=train   +data.valid_split=val   model.length=4096   loader.global_batch_size=32
