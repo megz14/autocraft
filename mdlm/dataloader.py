@@ -160,6 +160,162 @@ class Text8Tokenizer(transformers.PreTrainedTokenizer):
     return self._vocab_str_to_int
 
 
+class BlockTokenizer:
+  """Simple tokenizer for Minecraft-style 3D blocks.
+  
+  This tokenizer handles discrete block IDs (0-255) plus a [MASK] token.
+  Blocks are already integers, so no complex encoding/decoding is needed.
+  
+  Attributes:
+    vocab_size: Total vocabulary size (num_block_types + 1 for [MASK])
+    mask_token_id: ID of the [MASK] token (= num_block_types)
+    pad_token_id: ID used for padding (default: 0, which is typically "air")
+  """
+  
+  # Common Minecraft block names (partial list for visualization)
+  BLOCK_NAMES = {
+    0: "air",
+    1: "stone",
+    2: "grass",
+    3: "dirt",
+    4: "cobblestone",
+    5: "planks",
+    6: "sapling",
+    7: "bedrock",
+    8: "water",
+    9: "stationary_water",
+    10: "lava",
+    11: "stationary_lava",
+    12: "sand",
+    13: "gravel",
+    14: "gold_ore",
+    15: "iron_ore",
+    16: "coal_ore",
+    17: "log",
+    18: "leaves",
+    19: "sponge",
+    20: "glass",
+    # ... more can be added as needed
+  }
+  
+  def __init__(self, num_block_types: int = 256):
+    """Initialize the BlockTokenizer.
+    
+    Args:
+      num_block_types: Number of distinct block types (default: 256).
+                       The vocabulary will be num_block_types + 1 to include [MASK].
+    """
+    self.num_block_types = num_block_types
+    self._vocab_size = num_block_types + 1  # +1 for [MASK] token
+    
+    # Special tokens
+    self.mask_token = "[MASK]"
+    self.mask_token_id = num_block_types  # e.g., 256
+    
+    # Padding token (air = 0 is natural padding for 3D structures)
+    self.pad_token = "air"
+    self.pad_token_id = 0
+    
+    # BOS/EOS tokens - not really used for 3D blocks, but code may reference them
+    self.bos_token = None
+    self.bos_token_id = None
+    self.eos_token = None
+    self.eos_token_id = None
+    
+    # UNK token for any out-of-range block IDs
+    self.unk_token = "[UNK]"
+    self.unk_token_id = num_block_types  # Map to mask as fallback
+    
+    # Build block name lookup (including [MASK])
+    self._id_to_name = {**self.BLOCK_NAMES, self.mask_token_id: "[MASK]"}
+  
+  @property
+  def vocab_size(self) -> int:
+    """Return the vocabulary size (num_block_types + 1 for [MASK])."""
+    return self._vocab_size
+  
+  def encode(self, block_ids):
+    """Encode block IDs (identity function since blocks are already IDs).
+    
+    Args:
+      block_ids: List or tensor of block IDs.
+      
+    Returns:
+      The same block IDs (possibly converted to list).
+    """
+    if hasattr(block_ids, 'tolist'):
+      return block_ids.tolist()
+    return list(block_ids)
+  
+  def decode(self, token_ids) -> typing.Union[str, typing.List[str]]:
+    """Convert block ID(s) to block name(s).
+    
+    Args:
+      token_ids: A single block ID or a sequence of block IDs.
+      
+    Returns:
+      Block name(s) as string(s).
+    """
+    if isinstance(token_ids, int):
+      return self._id_to_name.get(token_ids, f"block_{token_ids}")
+    
+    # Handle tensors
+    if hasattr(token_ids, 'tolist'):
+      token_ids = token_ids.tolist()
+    
+    return [self._id_to_name.get(t, f"block_{t}") for t in token_ids]
+  
+  def batch_decode(self, batch_token_ids, skip_special_tokens: bool = False) -> typing.List[str]:
+    """Decode a batch of block ID sequences to readable strings.
+    
+    Args:
+      batch_token_ids: Batch of sequences, shape (batch_size, seq_len).
+      skip_special_tokens: If True, skip [MASK] tokens in output.
+      
+    Returns:
+      List of decoded strings, one per sequence.
+    """
+    results = []
+    for seq in batch_token_ids:
+      if hasattr(seq, 'tolist'):
+        seq = seq.tolist()
+      
+      if skip_special_tokens:
+        seq = [t for t in seq if t != self.mask_token_id]
+      
+      decoded = self.decode(seq)
+      if isinstance(decoded, list):
+        # Join block names with commas for readability
+        results.append(", ".join(decoded[:20]) + ("..." if len(decoded) > 20 else ""))
+      else:
+        results.append(decoded)
+    return results
+  
+  def __call__(self, block_ids, **kwargs):
+    """For compatibility with HuggingFace tokenizer interface.
+    
+    Args:
+      block_ids: Block IDs to process.
+      **kwargs: Ignored (for compatibility).
+      
+    Returns:
+      Dict with 'input_ids' key.
+    """
+    if hasattr(block_ids, 'tolist'):
+      block_ids = block_ids.tolist()
+    return {"input_ids": block_ids}
+  
+  def get_vocab(self) -> typing.Dict[str, int]:
+    """Return vocabulary mapping (block_name -> block_id)."""
+    vocab = {f"block_{i}": i for i in range(self.num_block_types)}
+    vocab["[MASK]"] = self.mask_token_id
+    vocab.update({name: id for id, name in self._id_to_name.items() if id < self.num_block_types})
+    return vocab
+  
+  def __repr__(self) -> str:
+    return f"BlockTokenizer(num_block_types={self.num_block_types}, vocab_size={self.vocab_size})"
+
+
 def get_lambada_test_dataset():
     url = "https://openaipublic.blob.core.windows.net/gpt-2/data/lambada_test.jsonl"
 
@@ -533,6 +689,15 @@ def get_dataset(
 
 
 def get_tokenizer(config):
+  # Check if using craft3d data type - use BlockTokenizer
+  data_type = getattr(config.data, "type", "default")
+  if data_type == "craft3d":
+    num_block_types = getattr(config.data, "num_block_types", 256)
+    tokenizer = BlockTokenizer(num_block_types=num_block_types)
+    LOGGER.info(f"Using BlockTokenizer with {num_block_types} block types, vocab_size={tokenizer.vocab_size}")
+    return tokenizer
+  
+  # Standard text tokenizers
   if config.data.tokenizer_name_or_path == 'text8':
     tokenizer = Text8Tokenizer()
   elif config.data.tokenizer_name_or_path == 'bert-base-uncased':
