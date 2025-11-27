@@ -8,4 +8,11 @@ python main.py \
   loader.global_batch_size=64
 
 
-python main.py   mode=train   +data.type=craft3d   +data.craft3d_dir=/workspace/autocraft/autocraft/mdlm/dataset/3dcraft   +data.train_split=train   +data.valid_split=val   model.length=4096   loader.global_batch_size=32
+python main.py   mode=train   +data.type=craft3d   +data.craft3d_dir=/workspace/autocraft/autocraft/mdlm/dataset/3dcraft   +data.train_split=train   +data.valid_split=val   model.length=1024   loader.global_batch_size=1
+
+
+install conda di root
+conda env activate -f requirements2.yaml
+conda activate mdlm
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 
+pip install flash-attn

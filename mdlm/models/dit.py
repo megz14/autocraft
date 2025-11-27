@@ -415,6 +415,8 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     # indices shape (batch_size, seq_len)
     if coords is not None:
         self.coords = coords
+    #print("COORDINATES", self.coords.shape)
+        
 
     x = self.vocab_embed(indices) # shape (batch_size, seq_len, hidden_size)
     pos_emb = self.pos_emb_3d(self.coords).to(x.dtype) # shape (batch_size, seq_len, hidden_size)

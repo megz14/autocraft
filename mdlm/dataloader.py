@@ -587,7 +587,7 @@ def get_dataloaders(config, tokenizer, skip_train=False,
     raise ValueError(
       f'Eval Batch Size for {config.eval.batch_size} '
       f'not divisible by {num_gpus}.')
-  data_type = getattr(config.data, "type", "default")
+  data_type = getattr(config.data, "type", "default") # craft3d
 
   if skip_train:
     train_set = None
@@ -643,7 +643,8 @@ def get_dataloaders(config, tokenizer, skip_train=False,
       num_workers=config.loader.num_workers,
       pin_memory=config.loader.pin_memory,
       shuffle=not config.data.streaming,
-      persistent_workers=True)
+      persistent_workers=True,
+        drop_last=True)
     train_loader.tokenizer = tokenizer
   if skip_valid:
     valid_loader = None
@@ -660,7 +661,8 @@ def get_dataloaders(config, tokenizer, skip_train=False,
       num_workers=config.loader.num_workers,
       pin_memory=config.loader.pin_memory,
       shuffle=shuffle_valid,
-      generator=generator)
+      generator=generator,
+    drop_last=True)
     # Will be used in generative perplexity calculation
     valid_loader.tokenizer = tokenizer
 

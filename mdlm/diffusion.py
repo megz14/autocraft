@@ -363,6 +363,7 @@ class Diffusion(L.LightningModule):
     else:
       attention_mask = None
     coords = batch.get('coords')
+    #print('coords fresh from batch', coords.shape)
     losses = self._loss(batch['input_ids'], attention_mask, coords)
     loss = losses.loss
 
@@ -590,7 +591,7 @@ class Diffusion(L.LightningModule):
     return self.mask_index * torch.ones(
       * batch_dims, dtype=torch.int64)
 
-  def _ddpm_caching_update(self, x, t, dt, p_x0=None):
+  def _ddpm_caching_update(self, x, t, dt, p_x0=None,coords=None):
     assert self.config.noise.type == 'loglinear'
     sigma_t, _ = self.noise(t)
     if t.ndim > 1:
@@ -600,7 +601,7 @@ class Diffusion(L.LightningModule):
     move_chance_s = (t - dt)[:, None, None]
     assert move_chance_t.ndim == 3, move_chance_t.shape
     if p_x0 is None:
-      p_x0 = self.forward(x, sigma_t).exp()
+      p_x0 = self.forward(x, sigma_t, coords=coords).exp()
     
     assert move_chance_t.ndim == p_x0.ndim
     q_xs = p_x0 * (move_chance_t - move_chance_s)
@@ -656,7 +657,7 @@ class Diffusion(L.LightningModule):
     return x
 
   @torch.no_grad()
-  def _sample(self, num_steps=None, eps=1e-5):
+  def _sample(self, num_steps=None, eps=1e-5,coords=None):
     """Generate samples from the model."""
     batch_size_per_gpu = self.config.loader.eval_batch_size
     if self.parameterization == 'ar':
@@ -679,7 +680,7 @@ class Diffusion(L.LightningModule):
         x = self._ddpm_update(x, t, dt)
       elif self.sampler == 'ddpm_cache':
         p_x0_cache, x_next = self._ddpm_caching_update(
-          x, t, dt, p_x0=p_x0_cache)
+          x, t, dt, p_x0=p_x0_cache,coords=coords)
         if (not torch.allclose(x_next, x)
             or self.time_conditioning):
           # Disable caching
@@ -695,10 +696,10 @@ class Diffusion(L.LightningModule):
         x = self._denoiser_update(x, t)
       else:
         unet_conditioning = self.noise(t)[0]
-        x = self.forward(x, unet_conditioning).argmax(dim=-1)
+        x = self.forward(x, unet_conditioning,coords=coords).argmax(dim=-1)
     return x
 
-  def restore_model_and_sample(self, num_steps, eps=1e-5):
+  def restore_model_and_sample(self, num_steps, eps=1e-5, coords=None):
     """Generate samples from the model."""
     # Lightning auto-casting is not working in this method for some reason
     if self.ema:
@@ -710,7 +711,7 @@ class Diffusion(L.LightningModule):
         self.noise.parameters()))
     self.backbone.eval()
     self.noise.eval()
-    samples = self._sample(num_steps=num_steps, eps=eps)
+    samples = self._sample(num_steps=num_steps, eps=eps,coords=coords)
     if self.ema:
       self.ema.restore(itertools.chain(
         self.backbone.parameters(),
@@ -834,13 +835,13 @@ class Diffusion(L.LightningModule):
       new_attention_mask = attention_mask
     return input_tokens, output_tokens, new_attention_mask
 
-  def _reconstruction_loss(self, x0):
+  def _reconstruction_loss(self, x0,coords=None):
     t0 = torch.zeros(x0.shape[0], dtype=self.dtype,
                      device=self.device)
     assert self.config.noise.type == 'loglinear'
     # The above assert is for d3pm parameterization
     unet_conditioning = self.noise(t0)[0][:, None]
-    model_output_t0 = self.forward(x0, unet_conditioning)
+    model_output_t0 = self.forward(x0, unet_conditioning,coords=coords)
     return - torch.gather(input=model_output_t0,
                           dim=-1,
                           index=x0[:, :, None]).squeeze(-1)
@@ -959,7 +960,7 @@ class Diffusion(L.LightningModule):
   def sample_subs_guidance(
     self, n_samples, stride_length, num_strides, dt=0.001):
     ones = torch.ones(n_samples, dtype=self.dtype,
-                      device=self.device)
+                      device=self.device,coords=None)
 
     num_steps = int(1 / dt)
     sampling_steps = 0
@@ -974,13 +975,13 @@ class Diffusion(L.LightningModule):
         x[:, : -stride_length] = target
       for i in range(num_steps + 1):
         p_x0_cache, x_next = self._ddpm_caching_update(
-          x=x, t=(1 - i * dt) * ones, dt=dt, p_x0=p_x0_cache)
+          x=x, t=(1 - i * dt) * ones, dt=dt, p_x0=p_x0_cache,coords=coords)
         if (not torch.allclose(x_next, x)
             or self.time_conditioning):
           p_x0_cache = None
           sampling_steps += 1
         x = x_next
-      x = self.forward(x, 0 * ones).argmax(dim=-1)
+      x = self.forward(x, 0 * ones,coords=coords).argmax(dim=-1)
       intermediate_tokens.append(
         x[:, :stride_length].cpu().numpy())
       target = x[:, stride_length:]
