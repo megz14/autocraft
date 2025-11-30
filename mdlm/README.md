@@ -110,7 +110,7 @@ To generate samples from a pre-trained model use one of the following commands:
 python main.py \
   mode=sample_eval \
   eval.checkpoint_path=kuleshov-group/mdlm-owt \
-  data=openwebtext-split  \
+  data=craft3D  \
   model.length=1024  \
   sampling.predictor=ddpm_cache  \
   sampling.steps=1000 \

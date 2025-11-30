@@ -1,0 +1,7 @@
+dataset/3dcraft/
+.ipynb_checkpoints/
+__pycache__/
+outputs/
+init*
+*.sh
+*.txt

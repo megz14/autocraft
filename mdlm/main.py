@@ -7,6 +7,7 @@ import omegaconf
 import rich.syntax
 import rich.tree
 import torch
+import numpy as np
 
 import dataloader
 import diffusion
@@ -93,6 +94,25 @@ def generate_samples(config, logger, tokenizer):
     model.ema = None
   stride_length = config.sampling.stride_length
   num_strides = config.sampling.num_strides
+
+  # ßFor craft3d, we need to load coordinates from the dataset
+  data_type = getattr(config.data, "type", "default")
+  coords = None
+  if data_type == "craft3d":
+    logger.info('Loading coordinates from craft3d dataset for sampling...')
+    # Load validation dataset to get coordinates
+    _, valid_ds = dataloader.get_dataloaders(
+      config, tokenizer, skip_train=True, valid_seed=config.seed)
+    # Get a batch of coordinates from the validation set
+    valid_batch = next(iter(valid_ds))
+    coords = valid_batch['coords'].to(model.device)
+
+    output_dir = config.checkpointing.save_dir
+    np.save(f'{output_dir}/groundtruth_blocks.npy', valid_batch["input_ids"].cpu().numpy())
+    np.save(f'{output_dir}/groundtruth_coords.npy', valid_batch["coords"])
+      
+    logger.info(f'Loaded coords with shape: {coords.shape}')
+    
   for _ in range(config.sampling.num_sample_batches):
     if config.sampling.semi_ar:
       _, intermediate_samples, _ = model.restore_model_and_semi_ar_sample(
@@ -107,14 +127,32 @@ def generate_samples(config, logger, tokenizer):
       # any text after the first EOS token.
     else:
       samples = model.restore_model_and_sample(
-        num_steps=config.sampling.steps)
+        num_steps=config.sampling.steps,
+        coords=coords)
       text_samples = model.tokenizer.batch_decode(samples)
-      model.compute_generative_perplexity(text_samples)
-  print('Text samples:', text_samples)
-  if not config.sampling.semi_ar:
+
+      # Skip generative perplexity for 3D blocks (text-only metric)
+      if data_type != "craft3d":
+        model.compute_generative_perplexity(text_samples)
+  
+  print('Generated samples:', text_samples)
+  
+  # For craft3d, also save the raw block IDs and coordinates
+  if data_type == "craft3d":
+    print(f'Raw block IDs shape: {samples.shape}')
+    print(f'Coordinates shape: {coords.shape}')
+    # Optionally save to file
+    
+    output_dir = config.checkpointing.save_dir
+    np.save(f'{output_dir}/generated_blocks.npy', samples.cpu().numpy())
+    np.save(f'{output_dir}/coords.npy', coords.cpu().numpy())
+    logger.info(f'Saved generated blocks and coords to {output_dir}/')
+  
+  if not config.sampling.semi_ar and data_type != "craft3d":
     print('Generative perplexity:',
           model.gen_ppl_metric.compute())
   return text_samples
+
 
 def _ppl_eval(config, logger, tokenizer):
   logger.info('Starting Zero Shot Eval.')
