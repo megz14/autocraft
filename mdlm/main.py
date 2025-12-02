@@ -567,6 +567,7 @@ def _train(config, logger, tokenizer):
 def main(config):
   """Main entry point for training."""
   L.seed_everything(config.seed)
+  torch.set_float32_matmul_precision('high')  # Enable Tensor Core acceleration on A40 GPU
   _print_config(config, resolve=True, save_cfg=True)
   
   logger = utils.get_logger(__name__)
