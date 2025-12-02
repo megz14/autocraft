@@ -6,10 +6,10 @@ import argparse
 from pathlib import Path
 import numpy as np
 
-# Add parent directory to path to import from main
+# Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from main import create_tower_schematic, create_well_schematic
+from helper.schematic_utils import create_tower_schematic, create_well_schematic
 
 
 def main():
