@@ -328,55 +328,75 @@ class Craft3DDataset(Dataset):
     def _resize_schematic(self, schematic: np.ndarray, block_size: int = 32) -> Optional[np.ndarray]:
         """Centers the schematic around the center of mass, resizes it to the block size and pads with zeroes.
 
+        The normalization process:
+        1. Find center of mass of occupied blocks
+        2. Shift coordinates so center of mass is at (block_size//2, block_size//2, block_size//2)
+        3. Crop if larger than block_size (keeps blocks closest to center)
+        4. Pad with zeros if smaller than block_size
+        
+        This ensures all schematics are exactly block_size x block_size x block_size,
+        with coordinates centered around (0,0,0) relative to the center of mass.
+
         Args:
             schematic (np.ndarray): The schematic - of format: (y, z, x, entryshape)
+            block_size (int): Target size for each dimension (default: 32)
 
         Returns:
-            np.ndarray: the re-centered schematic
+            np.ndarray: the normalized schematic of shape (block_size, block_size, block_size, entryshape)
         """
         if schematic.sum() <= 0:
             return None
         
-        # Center the schematic around the center of mass
-        coords = np.array(schematic.nonzero())
-        if len(coords) == 0:
+        # Get original shape
+        orig_shape = schematic.shape[:3]  # (y, z, x)
+        
+        # Find center of mass of occupied blocks
+        # Extract first channel for occupancy check (handles both 3D and 4D schematics)
+        if len(schematic.shape) == 4:
+            occupancy = schematic[..., 0] > 0  # Shape: (y, z, x)
+        else:
+            occupancy = schematic > 0  # Shape: (y, z, x)
+        
+        # Get coordinates of occupied blocks
+        nonzero_coords = np.nonzero(occupancy)  # Returns tuple of 3 arrays: (y_coords, z_coords, x_coords)
+        if len(nonzero_coords[0]) == 0:
             return None
         
-        center_of_mass = np.mean(coords, axis=1)
+        # Stack coordinates: shape (3, N) where each column is (y, z, x)
+        coords = np.stack(nonzero_coords, axis=0)  # Shape: (3, N)
+        center_of_mass = np.mean(coords, axis=1)  # Average across all occupied blocks, shape: (3,)
         center_of_mass = np.round(center_of_mass).astype(int)
-        schematic = np.roll(schematic, -center_of_mass, axis=(0, 1, 2))
-
-        # Resize the schematic to the block size
-        if schematic.shape[0] > block_size:
-            schematic = schematic[: block_size, :, :]
-        if schematic.shape[1] > block_size:
-            schematic = schematic[:, : block_size, :]
-        if schematic.shape[2] > block_size:
-            schematic = schematic[:, :, : block_size]
-
-        # Pad with zeroes
-        if schematic.shape[0] < block_size:
-            schematic = np.pad(
-                schematic,
-                ((0, block_size - schematic.shape[0]), (0, 0), (0, 0)),
-                mode="constant",
-                constant_values=0,
-            )
-        if schematic.shape[1] < block_size:
-            schematic = np.pad(
-                schematic,
-                ((0, 0), (0, block_size - schematic.shape[1]), (0, 0)),
-                mode="constant",
-                constant_values=0,
-            )
-        if schematic.shape[2] < block_size:
-            schematic = np.pad(
-                schematic,
-                ((0, 0), (0, 0), (0, block_size - schematic.shape[2])),
-                mode="constant",
-                constant_values=0,
-            )
-        return schematic
+        
+        # Calculate shift to center the schematic
+        # We want center_of_mass to be at (block_size//2, block_size//2, block_size//2)
+        target_center = block_size // 2
+        shift = target_center - center_of_mass  # How much to shift each axis
+        
+        # Create new empty schematic of target size
+        if len(schematic.shape) == 4:
+            normalized = np.zeros((block_size, block_size, block_size, schematic.shape[3]), dtype=schematic.dtype)
+        else:
+            normalized = np.zeros((block_size, block_size, block_size), dtype=schematic.dtype)
+        
+        # Copy blocks to new positions (with shift applied)
+        for y in range(orig_shape[0]):
+            for z in range(orig_shape[1]):
+                for x in range(orig_shape[2]):
+                    # Calculate new position after shifting
+                    new_y = y + shift[0]
+                    new_z = z + shift[1]
+                    new_x = x + shift[2]
+                    
+                    # Only copy if within bounds
+                    if (0 <= new_y < block_size and 
+                        0 <= new_z < block_size and 
+                        0 <= new_x < block_size):
+                        if len(schematic.shape) == 4:
+                            normalized[new_y, new_z, new_x] = schematic[y, z, x]
+                        else:
+                            normalized[new_y, new_z, new_x] = schematic[y, z, x]
+        
+        return normalized
 
     def _find_valid_items(self):
         self._valid_indices = {}
