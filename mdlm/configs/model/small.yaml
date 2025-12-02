@@ -1,6 +1,6 @@
 name: small
 type: ddit
-hidden_size: 264  # Must be divisible by n_heads (264 = 12 * 22)
+hidden_size: 132  # Must be divisible by n_heads (264 = 12 * 22)
 cond_dim: 128
 length: 1024
 n_blocks: 12

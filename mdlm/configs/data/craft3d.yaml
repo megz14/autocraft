@@ -5,8 +5,8 @@ valid: craft3d_val
 craft3d_dir: dataset/3dcraft
 train_split: train
 valid_split: val
-vocab_size: 257  # Block types 0-252 + mask token at 256 (max block ID in data is 252)
+vocab_size: 128  # Compact block IDs 0-126 (127 block types) + mask token at 127
 pad_token_id: 0
 bos_token_id: 0
 eos_token_id: 0
-mask_token_id: 256  # Mask token
+mask_token_id: 127  # Mask token (next ID after compact block IDs 0-126)
