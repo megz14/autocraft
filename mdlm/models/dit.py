@@ -389,7 +389,7 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     self.sigma_map = TimestepEmbedder(config.model.cond_dim)
     self.rotary_emb = Rotary(
       config.model.hidden_size // config.model.n_heads)
-    self.pos_emb_3d = SinusoidalPositionalEmbedding3D(
+    self.pos_emb_3d = PositionalEncoding3D(
       config.model.hidden_size)
 
     blocks = []
