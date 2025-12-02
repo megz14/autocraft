@@ -107,33 +107,78 @@ def _blocks_to_schematic(block_ids, coords, attention_mask=None, pad_token_id=0,
   # Create empty voxel grid (y, z, x, 2) format like normalized schematic.npy
   schematic = np.zeros((block_size, block_size, block_size, 2), dtype=np.uint8)
   
-  # Coordinates are centered at (0,0,0), so shift them to [0, block_size) range
-  offset = block_size // 2
+  # Determine if coordinates need shifting based on their range
+  # Normalized coordinates from dataset are in [0, block_size) range
+  # But if they're centered at (0,0,0), they would be in [-block_size/2, block_size/2] range
+  needs_shift = False
+  if len(coords) > 0:
+    min_coord = float(coords.min())
+    max_coord = float(coords.max())
+    # If we see negative coordinates, they're centered at 0 and need shifting
+    if min_coord < 0:
+      needs_shift = True
+      offset = block_size // 2
+    # If coordinates are in [0, block_size) range, use directly
+    elif min_coord >= 0 and max_coord < block_size:
+      needs_shift = False
+      offset = 0
+    else:
+      # Default: assume coordinates need to be centered
+      needs_shift = True
+      offset = block_size // 2
+  else:
+    offset = 0
   
   # Place blocks in the grid
+  placed_count = 0
+  collision_count = 0
+  out_of_bounds_count = 0
+  
   for i in range(len(block_ids)):
     block_id = int(block_ids[i])
     x, y, z = coords[i]
     
-    # Shift coordinates from centered at (0,0,0) to [0, block_size)
-    x = int(np.round(x + offset))
-    y = int(np.round(y + offset))
-    z = int(np.round(z + offset))
+    # Apply offset if needed
+    if needs_shift:
+      x = x + offset
+      y = y + offset
+      z = z + offset
     
-    # Clip to valid range [0, block_size)
-    x = np.clip(x, 0, block_size - 1)
-    y = np.clip(y, 0, block_size - 1)
-    z = np.clip(z, 0, block_size - 1)
+    # Round to integers
+    x = int(np.round(x))
+    y = int(np.round(y))
+    z = int(np.round(z))
+    
+    # Check bounds before clipping
+    x_valid = 0 <= x < block_size
+    y_valid = 0 <= y < block_size
+    z_valid = 0 <= z < block_size
+    
+    if not (x_valid and y_valid and z_valid):
+      out_of_bounds_count += 1
+      continue
     
     # Skip if block_id is padding (0)
     if block_id == pad_token_id or block_id == 0:
       continue
+    
+    # Check for collision (overwriting existing block)
+    if schematic[y, z, x, 0] > 0:
+      collision_count += 1
     
     # Place block in schematic (format is y, z, x, channels)
     # Channel 0: block ID
     # Channel 1: metadata (set to 0 for now since we don't have that info)
     schematic[y, z, x, 0] = block_id
     schematic[y, z, x, 1] = 0
+    placed_count += 1
+  
+  # Debug: print statistics if there are issues
+  if len(block_ids) > 0:
+    if out_of_bounds_count > 0 or collision_count > 0 or placed_count < len(block_ids) * 0.9:
+      print(f'[Schematic conversion] Placed {placed_count}/{len(block_ids)} blocks, '
+            f'{out_of_bounds_count} out-of-bounds, {collision_count} collisions, '
+            f'coords range: [{min_coord:.1f}, {max_coord:.1f}], needs_shift: {needs_shift}')
   
   return schematic
 
