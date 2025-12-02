@@ -94,6 +94,8 @@ def generate_samples(config, logger, tokenizer):
   # For Craft3D, get coordinates and ground truth blocks from validation dataset
   coords = None
   ground_truth_blocks = None
+  attention_mask = None
+  pad_token_id = None
   if is_craft3d:
     logger.info('Loading coordinates from validation dataset...')
     import dataloader
@@ -113,8 +115,11 @@ def generate_samples(config, logger, tokenizer):
     batch = next(val_iter)
     coords = batch['coords']  # Shape: (batch_size, seq_len, 3)
     ground_truth_blocks = batch['input_ids']  # Shape: (batch_size, seq_len) - ground truth block IDs
+    attention_mask = batch['attention_mask']  # Shape: (batch_size, seq_len) - 1 for real tokens, 0 for padding
+    pad_token_id = tokenizer.pad_token_id if hasattr(tokenizer, 'pad_token_id') else 0
     logger.info(f'Loaded coordinates shape: {coords.shape}')
     logger.info(f'Loaded ground truth blocks shape: {ground_truth_blocks.shape}')
+    logger.info(f'Loaded attention mask shape: {attention_mask.shape}')
   
   if not is_craft3d and hasattr(model, 'gen_ppl_metric'):
     model.gen_ppl_metric.reset()
@@ -150,6 +155,14 @@ def generate_samples(config, logger, tokenizer):
           num_steps=config.sampling.steps)
       if is_craft3d:
         # For Craft3D, samples are block IDs (not text)
+        # Mask out padding positions - set them back to pad_token_id
+        if attention_mask is not None and pad_token_id is not None:
+          # attention_mask: 1 for real tokens, 0 for padding
+          # Set padding positions (where attention_mask == 0) back to pad_token_id
+          padding_mask = (attention_mask == 0).to(samples.device)
+          samples = torch.where(padding_mask, 
+                                torch.tensor(pad_token_id, device=samples.device, dtype=samples.dtype),
+                                samples)
         logger.info(f'Generated samples shape: {samples.shape}')
         logger.info(f'Sample statistics: min={samples.min()}, max={samples.max()}, unique={len(torch.unique(samples))}')
         text_samples = samples  # Return block IDs directly
@@ -174,17 +187,36 @@ def generate_samples(config, logger, tokenizer):
         print(f'\nGround truth block IDs (first sample, first 100 positions):')
         print(ground_truth_blocks[0, :100].cpu().tolist() if ground_truth_blocks.shape[0] > 0 else ground_truth_blocks)
         
-        # Print comparison for first sample
+        # Print comparison for first sample (excluding padding)
         if samples.shape[0] > 0 and ground_truth_blocks.shape[0] > 0:
           seq_len = min(samples.shape[1], ground_truth_blocks.shape[1])
           # Move to same device for comparison
           samples_cpu = samples[0, :seq_len].cpu()
           gt_cpu = ground_truth_blocks[0, :seq_len].cpu()
-          matches = (samples_cpu == gt_cpu).sum().item()
-          total = seq_len
-          accuracy = matches / total * 100 if total > 0 else 0
-          print(f'\nComparison (first sample, first {seq_len} positions):')
-          print(f'  Matching positions: {matches}/{total} ({accuracy:.2f}%)')
+          
+          # Only compare non-padding positions
+          if attention_mask is not None:
+            attn_mask_cpu = attention_mask[0, :seq_len].cpu()
+            # Filter to only non-padding positions (where attention_mask == 1)
+            non_padding_mask = (attn_mask_cpu == 1)
+            if non_padding_mask.sum() > 0:
+              samples_non_pad = samples_cpu[non_padding_mask]
+              gt_non_pad = gt_cpu[non_padding_mask]
+              matches = (samples_non_pad == gt_non_pad).sum().item()
+              total = non_padding_mask.sum().item()
+              accuracy = matches / total * 100 if total > 0 else 0
+              print(f'\nComparison (first sample, non-padding positions only):')
+              print(f'  Non-padding positions: {total}/{seq_len}')
+              print(f'  Matching positions: {matches}/{total} ({accuracy:.2f}%)')
+            else:
+              print(f'\nComparison: No non-padding positions found')
+          else:
+            # Fallback: compare all positions if no attention_mask
+            matches = (samples_cpu == gt_cpu).sum().item()
+            total = seq_len
+            accuracy = matches / total * 100 if total > 0 else 0
+            print(f'\nComparison (first sample, all positions):')
+            print(f'  Matching positions: {matches}/{total} ({accuracy:.2f}%)')
       print('='*70 + '\n')
   else:
     print('Text samples:', text_samples)
