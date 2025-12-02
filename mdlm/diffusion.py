@@ -77,8 +77,6 @@ class Diffusion(L.LightningModule):
     self.tokenizer = tokenizer
     self.vocab_size = self.tokenizer.vocab_size
     self.sampler = self.config.sampling.predictor
-    self.gen_ppl_eval_model_name_or_path = self.config.eval.\
-      gen_ppl_eval_model_name_or_path
     self.antithetic_sampling = self.config.training.antithetic_sampling
     self.importance_sampling = self.config.training.importance_sampling
     self.change_of_variables = self.config.training.change_of_variables
@@ -89,25 +87,13 @@ class Diffusion(L.LightningModule):
     else:
       self.mask_index = self.tokenizer.mask_token_id
     self.parameterization = self.config.parameterization
-    if self.config.backbone == 'dit':
-      self.backbone = models.dit.DIT(
-        self.config, vocab_size=self.vocab_size)
-    elif self.config.backbone == 'dimamba':
-      self.backbone = models.dimamba.DiMamba(
-        self.config,
-        vocab_size=self.vocab_size,
-        pad_token_id=self.tokenizer.pad_token_id)
-    elif self.config.backbone == 'ar':
-      self.backbone = models.autoregressive.AR(
-        self.config,
-        vocab_size=self.vocab_size,
-        mask_index=self.mask_index)
-    elif self.config.backbone == 'hf_dit':
-      self.backbone = transformers.AutoModelForMaskedLM.from_pretrained(
-        config.eval.checkpoint_path, trust_remote_code=True)
-    else:
+    
+    # Only support DIT backbone
+    if self.config.backbone != 'dit':
       raise ValueError(
-        f'Unknown backbone: {self.config.backbone}')
+        f'Only DIT backbone is supported. Got: {self.config.backbone}')
+    self.backbone = models.dit.DIT(
+      self.config, vocab_size=self.vocab_size)
 
     self.T = self.config.T
     self.subs_masking = self.config.subs_masking
@@ -123,16 +109,6 @@ class Diffusion(L.LightningModule):
     self.train_metrics = metrics.clone(prefix='train/')
     self.valid_metrics = metrics.clone(prefix='val/')
     self.test_metrics = metrics.clone(prefix='test/')
-
-    # generative perplexity
-    self.gen_ppl_metric = Perplexity()
-    self.eval_model_tokenizer = transformers.AutoTokenizer.\
-      from_pretrained(self.gen_ppl_eval_model_name_or_path)
-    if self.eval_model_tokenizer.pad_token is None:
-      self.eval_model_tokenizer.pad_token =\
-          self.eval_model_tokenizer.eos_token
-      self.eval_model_tokenizer.pad_token_id =\
-          self.eval_model_tokenizer.eos_token_id
 
     self.noise = noise_schedule.get_noise(self.config,
                                           dtype=self.dtype)
@@ -164,6 +140,8 @@ class Diffusion(L.LightningModule):
       assert self.parameterization in {'d3pm', 'subs'}
     if self.subs_masking:
       assert self.parameterization == 'd3pm'
+    # Only DIT backbone is supported
+    assert self.config.backbone == 'dit'
 
   def on_load_checkpoint(self, checkpoint):
     if self.ema:
@@ -299,9 +277,7 @@ class Diffusion(L.LightningModule):
     return logits
 
   def _process_sigma(self, sigma):
-    if sigma is None:
-      assert self.parameterization == 'ar'
-      return sigma
+    # sigma should not be None for diffusion models (not AR)
     if sigma.ndim > 1:
       sigma = sigma.squeeze(-1)
     if not self.time_conditioning:
@@ -416,32 +392,23 @@ class Diffusion(L.LightningModule):
   def on_validation_epoch_end(self):
     if ((self.config.eval.compute_perplexity_on_sanity
          or not self.trainer.sanity_checking)
-         and self.config.eval.generate_samples
-         and not self.parameterization == 'ar'):
-      # TODO(justin): implement sampling and kv cache for AR
-      samples, text_samples = None, None
+         and self.config.eval.generate_samples):
+      # Generate samples (block IDs for Craft3D)
+      samples = None
       for _ in range(
         self.config.sampling.num_sample_batches):
         samples = self._sample()
-        # Decode the samples to be re-tokenized by eval model
-        text_samples = self.tokenizer.batch_decode(samples)
-        if self.config.eval.compute_generative_perplexity:
-          self.compute_generative_perplexity(text_samples)
+        # For Craft3D, samples are block IDs, no text decoding needed
+      # Logging samples as block IDs if needed
       if self.trainer.global_rank == 0 and hasattr(
         self.trainer.logger, 'log_table'):
-        # Log the last generated samples
-        text_samples = text_samples[
-          : self.config.sampling.num_sample_log]
-        self.trainer.logger.log_table(
-          key=f'samples@global_step{self.global_step}',
-          columns=['Generated Samples'],
-          data=[[s] for s in text_samples])
-      if self.config.eval.compute_generative_perplexity:
-        self.log('val/gen_ppl',
-                 self.gen_ppl_metric,
-                 on_epoch=True,
-                 on_step=False,
-                 sync_dist=True)
+        # Log sample statistics instead of text
+        sample_stats = {
+          'num_samples': samples.shape[0] if samples is not None else 0,
+          'seq_length': samples.shape[1] if samples is not None else 0,
+          'unique_blocks': len(torch.unique(samples)) if samples is not None else 0
+        }
+        # Note: For Craft3D, we don't decode to text
     if self.ema:
       self.ema.restore(
         itertools.chain(self.backbone.parameters(),
@@ -471,107 +438,6 @@ class Diffusion(L.LightningModule):
     }
     return [optimizer], [scheduler_dict]
 
-  @torch.no_grad()
-  def eval_retokenize(self, text_samples, max_length):
-    """Retokenizes samples for the eval model.
-    
-    Args:
-        text_samples: List of sentences generated by the model.
-    Returns:
-        samples: Samples re-tokenized for the eval model
-        attn_mask: Attention mask for the eval model
-        eval_context_size: Size of the context for the eval model
-    """
-    if 'llama2' in self.gen_ppl_eval_model_name_or_path:
-      tokenizer_kwargs = {
-        'text_samples': text_samples,
-        'return_tensors': 'pt',
-        'return_token_type_ids': False,
-        'return_attention_mask': True,
-        'truncation': True,
-        'padding': True,
-        'max_length': max_length,
-      }
-      eval_context_size = 4096
-    else:
-      tokenizer_kwargs = {
-        'return_tensors': 'pt',
-        'return_token_type_ids': False,
-        'return_attention_mask': True,
-        'truncation': True,
-        'padding': True,
-        'max_length': max_length,
-      }
-      eval_context_size = 1024
-    samples = self.eval_model_tokenizer(
-      text_samples, ** tokenizer_kwargs)
-    attn_mask = samples['attention_mask']
-    samples = samples['input_ids']
-    if 'llama2' not in self.gen_ppl_eval_model_name_or_path:
-      attn_mask = attn_mask.to(self.device)
-      samples = samples.to(self.device)      
-    return samples, attn_mask, eval_context_size
-
-  @torch.no_grad()
-  def compute_generative_perplexity(
-    self,
-    text_samples: typing.List[str],
-    retokenize: bool = True,
-    max_length: typing.Optional[int] = None) -> None:
-    """Compute the generative perplexity of the model.
-
-    Args:
-        text_samples: List of sentences generated by the model.
-    
-    Returns:
-        Perplexity of the generated text under a different
-        pre-trained AR model (e.g., GPT2).
-    """
-    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-    eval_model = transformers.AutoModelForCausalLM.from_pretrained(
-      self.gen_ppl_eval_model_name_or_path).eval()
-    if max_length is None:
-      max_length = self.config.model.length
-    if 'llama2' not in self.gen_ppl_eval_model_name_or_path:
-      eval_model = eval_model.to(self.device)
-    # Re-tokenize using eval model's tokenizer
-    if retokenize:
-      (samples, attn_mask,
-       eval_context_size) = self.eval_retokenize(
-         text_samples, max_length=max_length)
-    else:
-      samples = text_samples
-      attn_mask = torch.ones(samples.shape).to(self.device)
-      eval_context_size = samples.shape[-1]
-    batch_size = min(
-      self.config.eval.perplexity_batch_size,
-      samples.shape[0])
-    num_batches = samples.shape[0] // batch_size
-    for i in range(num_batches):
-      _samples = torch.split(
-        samples[i * batch_size: (i + 1) * batch_size],
-        eval_context_size,
-        dim=-1)
-      _attn_mask = torch.split(
-        attn_mask[i * batch_size: (i + 1) * batch_size],
-        eval_context_size,
-        dim=-1)
-      for (sample_chunk, attn_mask_chunk) in zip(
-        _samples, _attn_mask):
-        logits = eval_model(
-          sample_chunk, attention_mask=attn_mask_chunk)[0]
-        logits = logits.transpose(-1, -2)
-        
-        nlls = F.cross_entropy(logits[..., :-1],
-                               sample_chunk[..., 1:],
-                               reduction='none')
-        first_eos = (sample_chunk == self.eval_model_tokenizer\
-                     .eos_token_id).cumsum(-1) == 1
-        token_mask = (
-          sample_chunk
-          != self.eval_model_tokenizer.eos_token_id)
-        self.gen_ppl_metric.update(
-          nlls, first_eos[..., 1:] + token_mask[..., 1:])
 
   def q_xt(self, x, move_chance):
     """Computes the noisy sample xt.
@@ -637,24 +503,6 @@ class Diffusion(L.LightningModule):
     copy_flag = (x != self.mask_index).to(x.dtype)
     return copy_flag * x + (1 - copy_flag) * _x
 
-  def _ar_sampler(self, bsz):
-    # precompute token buffer
-    num_pred_tokens = self.config.model.length - 1
-    x = torch.zeros(
-      (bsz, num_pred_tokens + 1),
-      dtype=torch.long,
-      device=self.device)
-    x[:, 0] = self.tokenizer.bos_token_id
-    # precompute noise
-    noise = (torch.distributions.Gumbel(0, 1)
-             .sample((bsz, num_pred_tokens, self.vocab_size))
-             .to(self.device))
-    for i in range(num_pred_tokens):
-      next_logits = self.forward(x[:, :i + 1], None)[:, -1]
-      y = (next_logits + noise[:, i]).argmax(-1)
-      x[:, i + 1] = y
-    return x
-
   @torch.no_grad()
   def _sample(self, num_steps=None, eps=1e-5, coords=None):
     """Generate samples from the model.
@@ -666,8 +514,6 @@ class Diffusion(L.LightningModule):
               using DIT backbone, will generate placeholder coords (zeros).
     """
     batch_size_per_gpu = self.config.loader.eval_batch_size
-    if self.parameterization == 'ar':
-      return self._ar_sampler(batch_size_per_gpu)
     # Lightning auto-casting is not working in this method for some reason
     if num_steps is None:
       num_steps = self.config.sampling.steps
@@ -676,7 +522,7 @@ class Diffusion(L.LightningModule):
       self.config.model.length).to(self.device)
     
     # Generate placeholder coords if needed for DIT backbone
-    if coords is None and self.config.backbone == 'dit':
+    if coords is None:
       # Create zero-padded coords as placeholder during sampling
       # Shape: (batch_size, seq_len, 3)
       coords = torch.zeros(
@@ -828,22 +674,12 @@ class Diffusion(L.LightningModule):
     seqlen = x0.shape[1]
     if seqlen > self.config.model.length:
       assert seqlen == 2 * self.config.model.length
-      # cropping is needed for text8-crop dataset
-      # try the same starting point for now
+      # cropping for sequences longer than model length
       start = np.random.choice(self.config.model.length)
       end = start + self.config.model.length
       input_tokens = x0[:, start: end]
       output_tokens = x0[:, start + 1: end + 1]
       new_attention_mask = attention_mask[:, start: end]
-
-      # Helps with validation PPL, since the val
-      # examples will all start and end with BOS/EOS
-      input_tokens[:, 0] = self.tokenizer.bos_token_id
-      output_tokens[:, -1] = self.tokenizer.eos_token_id
-    elif self.parameterization == 'ar':
-      input_tokens = x0[:, :-1]
-      output_tokens = x0[:, 1:]
-      new_attention_mask = attention_mask[:, 1:]
     else:
       input_tokens = x0
       output_tokens = None
@@ -915,12 +751,7 @@ class Diffusion(L.LightningModule):
      attention_mask) = self._maybe_sub_sample(
        x0, attention_mask)
 
-    if self.parameterization == 'ar':
-      logprobs = self.backbone(input_tokens, None,coords=coords)
-      loss = - logprobs.gather(
-        -1, output_tokens[:, :, None])[:, :, 0]
-    else:
-      loss = self._forward_pass_diffusion(input_tokens,coords=coords)
+    loss = self._forward_pass_diffusion(input_tokens,coords=coords)
     
     nlls = loss * attention_mask
     count = attention_mask.sum()
@@ -1002,15 +833,10 @@ class Diffusion(L.LightningModule):
       target = x[:, stride_length:]
     
     intermediate_tokens.append(target.cpu().numpy())
-    intermediate_text_samples = []
-    sequence_lengths = ((
-      np.concatenate(intermediate_tokens, axis=1)[:, 1:]
-      == self.tokenizer.eos_token_id).cumsum(-1) == 0).sum(-1)
-    for i in range(2, len(intermediate_tokens) + 1):
-      intermediate_text_samples.append(
-        self.tokenizer.batch_decode(
-          np.concatenate(intermediate_tokens[:i], axis=1)))
-    return (sampling_steps, intermediate_text_samples,
+    # For Craft3D, return block IDs directly (no text decoding)
+    all_tokens = np.concatenate(intermediate_tokens, axis=1)
+    sequence_lengths = all_tokens.shape[1]
+    return (sampling_steps, intermediate_tokens,
             sequence_lengths)
 
   def restore_model_and_semi_ar_sample(
