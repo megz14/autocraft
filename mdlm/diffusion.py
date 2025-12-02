@@ -86,6 +86,10 @@ class Diffusion(L.LightningModule):
       self.vocab_size += 1
     else:
       self.mask_index = self.tokenizer.mask_token_id
+      # If mask_token_id is >= vocab_size, we need to increase vocab_size
+      # to accommodate it (vocab_size should be max(block_types) + 1 if mask is outside)
+      if self.mask_index >= self.vocab_size:
+        self.vocab_size = self.mask_index + 1
     self.parameterization = self.config.parameterization
     
     # Only support DIT backbone
