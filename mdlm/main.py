@@ -206,20 +206,32 @@ def generate_samples(config, logger, tokenizer):
               print(f'  Non-padding positions: {total}/{seq_len}')
               print(f'  Matching positions: {matches}/{total} ({accuracy:.2f}%)')
               
+              # Get coordinates for non-padding positions
+              coords_cpu = coords[0, :seq_len].cpu() if coords is not None else None
+              coords_non_pad = coords_cpu[non_padding_mask] if coords_cpu is not None else None
+              
               print(f'\nGenerated block IDs (first sample, all non-padding positions):')
               print(samples_non_pad.tolist())
               
               print(f'\nGround truth block IDs (first sample, all non-padding positions):')
               print(gt_non_pad.tolist())
               
-              # Print positions where they match vs mismatch (with original sequence position indices)
+              if coords_non_pad is not None:
+                print(f'\nCoordinates (first sample, all non-padding positions):')
+                print(coords_non_pad.tolist())
+              
+              # Print positions where they match vs mismatch (with original sequence position indices and coordinates)
               match_positions = (samples_non_pad == gt_non_pad)
               original_positions = torch.nonzero(non_padding_mask, as_tuple=False).squeeze(1).cpu()
               print(f'\nPosition-by-position comparison (showing original sequence positions):')
               for filtered_idx, (gen_id, gt_id, matches_pos) in enumerate(zip(samples_non_pad.tolist(), gt_non_pad.tolist(), match_positions.tolist())):
                 orig_pos = original_positions[filtered_idx].item()
                 match_symbol = '✓' if matches_pos else '✗'
-                print(f'  Seq Pos {orig_pos:4d}: Generated={gen_id:3d}, Ground Truth={gt_id:3d} {match_symbol}')
+                coord_str = ''
+                if coords_non_pad is not None:
+                  coord = coords_non_pad[filtered_idx].tolist()
+                  coord_str = f', Coords=({coord[0]:.1f},{coord[1]:.1f},{coord[2]:.1f})'
+                print(f'  Seq Pos {orig_pos:4d}: Generated={gen_id:3d}, Ground Truth={gt_id:3d} {match_symbol}{coord_str}')
             else:
               print(f'\nComparison: No non-padding positions found')
           else:
