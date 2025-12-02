@@ -237,19 +237,74 @@ class Craft3DDataset(Dataset):
         self._all_houses = []
         max_len = 0
         for filename in splits[self.subset]:
-            annotation = osp.join(self.data_dir, "houses", filename, "placed.json")
-            if not osp.isfile(annotation):
-                warnings.warn(f"No annotation file for: {annotation}")
+            schematic_path = osp.join(self.data_dir, "houses", filename, "schematic.npy")
+            if not osp.isfile(schematic_path):
+                warnings.warn(f"No schematic file for: {schematic_path}")
                 continue
-            annotation = self._load_annotation(annotation)
-            if len(annotation) >= 100:
+            annotation = self._load_schematic(schematic_path)
+            if annotation is not None and len(annotation) >= 100:
                 self._all_houses.append(annotation)
                 max_len = max(max_len, len(annotation))
 
         if self.next_steps <= 0:
             self.next_steps = max_len
 
+    def _load_schematic(self, schematic_path: str) -> Optional[torch.Tensor]:
+        """Load schematic from normalized schematic.npy file and extract occupied blocks.
+        
+        Args:
+            schematic_path: Path to schematic.npy file
+            
+        Returns:
+            torch.Tensor: Shape (N, 4) where each row is [block_type, x, y, z] for occupied blocks
+                         Returns None if schematic is empty or invalid
+        """
+        try:
+            schematic = np.load(schematic_path)
+        except Exception as e:
+            warnings.warn(f"Failed to load schematic {schematic_path}: {e}")
+            return None
+        
+        # Handle both 3D and 4D schematics
+        if len(schematic.shape) == 4:
+            # Shape: (y, z, x, 2) - extract block IDs from first channel
+            block_ids = schematic[..., 0]  # Shape: (y, z, x)
+        elif len(schematic.shape) == 3:
+            # Shape: (y, z, x) - already just block IDs
+            block_ids = schematic
+        else:
+            warnings.warn(f"Unexpected schematic shape: {schematic.shape}")
+            return None
+        
+        # Find all occupied blocks (block_id > 0)
+        occupied = np.where(block_ids > 0)
+        
+        if len(occupied[0]) == 0:
+            return None
+        
+        # Extract block types and coordinates
+        # schematic uses (y, z, x) but output format needs (x, y, z)
+        types_and_coords = []
+        for i in range(len(occupied[0])):
+            y, z, x = occupied[0][i], occupied[1][i], occupied[2][i]
+            block_type = int(block_ids[y, z, x])
+            # Output format: [block_type, x, y, z]
+            types_and_coords.append((block_type, x, y, z))
+        
+        if len(types_and_coords) == 0:
+            return None
+        
+        return torch.tensor(types_and_coords, dtype=torch.int64)
+    
     def _load_annotation(self, annotation_path: str) -> torch.Tensor:
+        """Legacy method: Load from placed.json (kept for backward compatibility).
+        
+        Args:
+            annotation_path: Path to placed.json file
+            
+        Returns:
+            torch.Tensor: Shape (N, 4) where each row is [block_type, x, y, z]
+        """
         with open(annotation_path, "r") as f:
             annotation = json.load(f)
         final_house = {}
