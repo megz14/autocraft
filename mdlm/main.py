@@ -178,14 +178,10 @@ def generate_samples(config, logger, tokenizer):
       print('='*70)
       print(f'Generated samples shape: {samples.shape}')
       print(f'Generated sample statistics: min={samples.min()}, max={samples.max()}, unique={len(torch.unique(samples))}')
-      print(f'\nGenerated block IDs (first sample, first 100 positions):')
-      print(samples[0, :100].cpu().tolist() if samples.shape[0] > 0 else samples)
       
       if ground_truth_blocks is not None:
         print(f'\nGround truth blocks shape: {ground_truth_blocks.shape}')
         print(f'Ground truth statistics: min={ground_truth_blocks.min()}, max={ground_truth_blocks.max()}, unique={len(torch.unique(ground_truth_blocks))}')
-        print(f'\nGround truth block IDs (first sample, first 100 positions):')
-        print(ground_truth_blocks[0, :100].cpu().tolist() if ground_truth_blocks.shape[0] > 0 else ground_truth_blocks)
         
         # Print comparison for first sample (excluding padding)
         if samples.shape[0] > 0 and ground_truth_blocks.shape[0] > 0:
@@ -205,9 +201,25 @@ def generate_samples(config, logger, tokenizer):
               matches = (samples_non_pad == gt_non_pad).sum().item()
               total = non_padding_mask.sum().item()
               accuracy = matches / total * 100 if total > 0 else 0
+              
               print(f'\nComparison (first sample, non-padding positions only):')
               print(f'  Non-padding positions: {total}/{seq_len}')
               print(f'  Matching positions: {matches}/{total} ({accuracy:.2f}%)')
+              
+              print(f'\nGenerated block IDs (first sample, all non-padding positions):')
+              print(samples_non_pad.tolist())
+              
+              print(f'\nGround truth block IDs (first sample, all non-padding positions):')
+              print(gt_non_pad.tolist())
+              
+              # Print positions where they match vs mismatch (with original sequence position indices)
+              match_positions = (samples_non_pad == gt_non_pad)
+              original_positions = torch.nonzero(non_padding_mask, as_tuple=False).squeeze(1).cpu()
+              print(f'\nPosition-by-position comparison (showing original sequence positions):')
+              for filtered_idx, (gen_id, gt_id, matches_pos) in enumerate(zip(samples_non_pad.tolist(), gt_non_pad.tolist(), match_positions.tolist())):
+                orig_pos = original_positions[filtered_idx].item()
+                match_symbol = '✓' if matches_pos else '✗'
+                print(f'  Seq Pos {orig_pos:4d}: Generated={gen_id:3d}, Ground Truth={gt_id:3d} {match_symbol}')
             else:
               print(f'\nComparison: No non-padding positions found')
           else:
@@ -217,6 +229,14 @@ def generate_samples(config, logger, tokenizer):
             accuracy = matches / total * 100 if total > 0 else 0
             print(f'\nComparison (first sample, all positions):')
             print(f'  Matching positions: {matches}/{total} ({accuracy:.2f}%)')
+            print(f'\nGenerated block IDs (first sample, all positions):')
+            print(samples_cpu.tolist())
+            print(f'\nGround truth block IDs (first sample, all positions):')
+            print(gt_cpu.tolist())
+      else:
+        # If no ground truth, just print all generated positions
+        print(f'\nGenerated block IDs (first sample, all positions):')
+        print(samples[0].cpu().tolist() if samples.shape[0] > 0 else samples.cpu().tolist())
       print('='*70 + '\n')
   else:
     print('Text samples:', text_samples)
