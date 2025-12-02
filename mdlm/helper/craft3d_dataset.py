@@ -204,31 +204,51 @@ class Craft3DDataset(Dataset):
 
     def _has_raw_data(self) -> bool:
         """Check if dataset already exists (houses directory with data files and splits.json)."""
-        houses_dir = osp.join(self.data_dir, "houses")
-        splits_path = osp.join(self.data_dir, "splits.json")
+        # Use absolute paths to avoid path resolution issues
+        data_dir_abs = osp.abspath(self.data_dir)
+        houses_dir = osp.join(data_dir_abs, "houses")
+        splits_path = osp.join(data_dir_abs, "splits.json")
+        
+        self._log(f"Dataset check: Looking for dataset in {data_dir_abs}")
         
         # Check if splits.json exists (required for loading the dataset)
         if not osp.isfile(splits_path):
+            self._log(f"Dataset check: splits.json not found at {splits_path}")
             return False
+        
+        self._log(f"Dataset check: Found splits.json at {splits_path}")
         
         # If houses directory exists and has content, data is already there
         if not osp.isdir(houses_dir):
+            self._log(f"Dataset check: houses directory not found at {houses_dir}")
             return False
+        
+        self._log(f"Dataset check: Found houses directory at {houses_dir}")
             
         try:
             items = os.listdir(houses_dir)
             if len(items) == 0:
+                self._log(f"Dataset check: houses directory is empty at {houses_dir}")
                 return False
+            
+            self._log(f"Dataset check: Found {len(items)} items in houses directory")
                 
             # Check if at least one house has data files
             for item in items:
                 house_path = osp.join(houses_dir, item)
                 if osp.isdir(house_path):
                     # Check for either schematic.npy (normalized) or placed.json (original)
-                    if (osp.isfile(osp.join(house_path, "schematic.npy")) or
-                        osp.isfile(osp.join(house_path, "placed.json"))):
+                    schematic_path = osp.join(house_path, "schematic.npy")
+                    placed_path = osp.join(house_path, "placed.json")
+                    if osp.isfile(schematic_path):
+                        self._log(f"Dataset check: Found existing dataset! Houses directory: {houses_dir}, Found schematic.npy in: {item}")
                         return True
-        except (OSError, PermissionError):
+                    elif osp.isfile(placed_path):
+                        self._log(f"Dataset check: Found existing dataset! Houses directory: {houses_dir}, Found placed.json in: {item}")
+                        return True
+            self._log(f"Dataset check: No house directories with data files found in {houses_dir} (checked {len(items)} items)")
+        except (OSError, PermissionError) as e:
+            self._log(f"Dataset check: Error accessing {houses_dir}: {e}")
             return False
         
         return False
@@ -237,14 +257,16 @@ class Craft3DDataset(Dataset):
         """Download dataset only if it doesn't already exist."""
         # Double-check that data doesn't already exist
         if self._has_raw_data():
-            houses_dir = osp.join(self.data_dir, "houses")
+            data_dir_abs = osp.abspath(self.data_dir)
+            houses_dir = osp.join(data_dir_abs, "houses")
             self._log(f"Dataset already exists at {houses_dir}, skipping download and extraction.")
             return
         
-        os.makedirs(self.data_dir, exist_ok=True)
+        data_dir_abs = osp.abspath(self.data_dir)
+        os.makedirs(data_dir_abs, exist_ok=True)
 
-        tar_path = osp.join(self.data_dir, "houses.tar.gz")
-        extracted_dir = osp.join(self.data_dir, "houses")
+        tar_path = osp.join(data_dir_abs, "houses.tar.gz")
+        extracted_dir = osp.join(data_dir_abs, "houses")
         
         # Download if tar doesn't exist
         if not osp.isfile(tar_path):
@@ -268,7 +290,7 @@ class Craft3DDataset(Dataset):
         
         self._log(f"Extracting dataset to {extracted_dir}")
         tar = tarfile.open(tar_path, "r")
-        tar.extractall(self.data_dir)
+        tar.extractall(data_dir_abs)
         tar.close()
         self._log(f"Extraction complete.")
 
