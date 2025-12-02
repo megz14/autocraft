@@ -408,8 +408,13 @@ class Diffusion(L.LightningModule):
     
     # Get validation dataloader
     val_dataloader = None
-    if hasattr(trainer, 'val_dataloaders') and trainer.val_dataloaders and len(trainer.val_dataloaders) > 0:
-      val_dataloader = trainer.val_dataloaders[0]
+    if hasattr(trainer, 'val_dataloaders') and trainer.val_dataloaders:
+      # Handle both cases: val_dataloaders as list or as single DataLoader
+      if isinstance(trainer.val_dataloaders, (list, tuple)) and len(trainer.val_dataloaders) > 0:
+        val_dataloader = trainer.val_dataloaders[0]
+      elif not isinstance(trainer.val_dataloaders, (list, tuple)):
+        # val_dataloaders is a single DataLoader object
+        val_dataloader = trainer.val_dataloaders
     elif hasattr(trainer, 'datamodule') and trainer.datamodule is not None:
       if hasattr(trainer.datamodule, 'val_dataloader'):
         val_dataloader = trainer.datamodule.val_dataloader()
