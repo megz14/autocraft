@@ -91,8 +91,9 @@ def generate_samples(config, logger, tokenizer):
   # Check if this is Craft3D data (doesn't have gen_ppl_metric)
   is_craft3d = getattr(config.data, "type", None) == "craft3d"
   
-  # For Craft3D, get coordinates from validation dataset
+  # For Craft3D, get coordinates and ground truth blocks from validation dataset
   coords = None
+  ground_truth_blocks = None
   if is_craft3d:
     logger.info('Loading coordinates from validation dataset...')
     import dataloader
@@ -111,7 +112,9 @@ def generate_samples(config, logger, tokenizer):
         break
     batch = next(val_iter)
     coords = batch['coords']  # Shape: (batch_size, seq_len, 3)
+    ground_truth_blocks = batch['input_ids']  # Shape: (batch_size, seq_len) - ground truth block IDs
     logger.info(f'Loaded coordinates shape: {coords.shape}')
+    logger.info(f'Loaded ground truth blocks shape: {ground_truth_blocks.shape}')
   
   if not is_craft3d and hasattr(model, 'gen_ppl_metric'):
     model.gen_ppl_metric.reset()
@@ -157,8 +160,32 @@ def generate_samples(config, logger, tokenizer):
   
   if is_craft3d:
     if samples is not None:
-      print('Generated block ID samples:', samples)
-      print(f'Sample shape: {samples.shape}')
+      print('\n' + '='*70)
+      print('SAMPLING RESULTS')
+      print('='*70)
+      print(f'Generated samples shape: {samples.shape}')
+      print(f'Generated sample statistics: min={samples.min()}, max={samples.max()}, unique={len(torch.unique(samples))}')
+      print(f'\nGenerated block IDs (first sample, first 100 positions):')
+      print(samples[0, :100].cpu().tolist() if samples.shape[0] > 0 else samples)
+      
+      if ground_truth_blocks is not None:
+        print(f'\nGround truth blocks shape: {ground_truth_blocks.shape}')
+        print(f'Ground truth statistics: min={ground_truth_blocks.min()}, max={ground_truth_blocks.max()}, unique={len(torch.unique(ground_truth_blocks))}')
+        print(f'\nGround truth block IDs (first sample, first 100 positions):')
+        print(ground_truth_blocks[0, :100].cpu().tolist() if ground_truth_blocks.shape[0] > 0 else ground_truth_blocks)
+        
+        # Print comparison for first sample
+        if samples.shape[0] > 0 and ground_truth_blocks.shape[0] > 0:
+          seq_len = min(samples.shape[1], ground_truth_blocks.shape[1])
+          # Move to same device for comparison
+          samples_cpu = samples[0, :seq_len].cpu()
+          gt_cpu = ground_truth_blocks[0, :seq_len].cpu()
+          matches = (samples_cpu == gt_cpu).sum().item()
+          total = seq_len
+          accuracy = matches / total * 100 if total > 0 else 0
+          print(f'\nComparison (first sample, first {seq_len} positions):')
+          print(f'  Matching positions: {matches}/{total} ({accuracy:.2f}%)')
+      print('='*70 + '\n')
   else:
     print('Text samples:', text_samples)
     if not config.sampling.semi_ar and hasattr(model, 'gen_ppl_metric'):
