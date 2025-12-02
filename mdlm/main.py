@@ -126,6 +126,15 @@ def generate_samples(config, logger, tokenizer):
     ground_truth_blocks = batch['input_ids']  # Shape: (batch_size, seq_len) - ground truth block IDs
     attention_mask = batch['attention_mask']  # Shape: (batch_size, seq_len) - 1 for real tokens, 0 for padding
     pad_token_id = tokenizer.pad_token_id if hasattr(tokenizer, 'pad_token_id') else 0
+    
+    # Ensure coordinates match eval_batch_size for sampling
+    eval_batch_size = config.loader.eval_batch_size
+    if coords.shape[0] != eval_batch_size:
+      logger.info(f'Adjusting batch size from {coords.shape[0]} to {eval_batch_size} for sampling')
+      coords = coords[:eval_batch_size]
+      ground_truth_blocks = ground_truth_blocks[:eval_batch_size]
+      attention_mask = attention_mask[:eval_batch_size]
+    
     logger.info(f'Loaded coordinates shape: {coords.shape}')
     logger.info(f'Loaded ground truth blocks shape: {ground_truth_blocks.shape}')
     logger.info(f'Loaded attention mask shape: {attention_mask.shape}')
