@@ -87,12 +87,22 @@ def generate_samples(config, logger, tokenizer):
   logger.info('Generating samples.')
   model = _load_from_checkpoint(config=config,
                                 tokenizer=tokenizer)
-  model.gen_ppl_metric.reset()
+  
+  # Check if this is Craft3D data (doesn't have gen_ppl_metric)
+  is_craft3d = getattr(config.data, "type", None) == "craft3d"
+  
+  if not is_craft3d and hasattr(model, 'gen_ppl_metric'):
+    model.gen_ppl_metric.reset()
+    
   if config.eval.disable_ema:
     logger.info('Disabling EMA.')
     model.ema = None
   stride_length = config.sampling.stride_length
   num_strides = config.sampling.num_strides
+  
+  samples = None
+  text_samples = None
+  
   for _ in range(config.sampling.num_sample_batches):
     if config.sampling.semi_ar:
       _, intermediate_samples, _ = model.restore_model_and_semi_ar_sample(
@@ -108,12 +118,25 @@ def generate_samples(config, logger, tokenizer):
     else:
       samples = model.restore_model_and_sample(
         num_steps=config.sampling.steps)
-      text_samples = model.tokenizer.batch_decode(samples)
-      model.compute_generative_perplexity(text_samples)
-  print('Text samples:', text_samples)
-  if not config.sampling.semi_ar:
-    print('Generative perplexity:',
-          model.gen_ppl_metric.compute())
+      if is_craft3d:
+        # For Craft3D, samples are block IDs (not text)
+        logger.info(f'Generated samples shape: {samples.shape}')
+        logger.info(f'Sample statistics: min={samples.min()}, max={samples.max()}, unique={len(torch.unique(samples))}')
+        text_samples = samples  # Return block IDs directly
+      else:
+        text_samples = model.tokenizer.batch_decode(samples)
+        if hasattr(model, 'compute_generative_perplexity'):
+          model.compute_generative_perplexity(text_samples)
+  
+  if is_craft3d:
+    if samples is not None:
+      print('Generated block ID samples:', samples)
+      print(f'Sample shape: {samples.shape}')
+  else:
+    print('Text samples:', text_samples)
+    if not config.sampling.semi_ar and hasattr(model, 'gen_ppl_metric'):
+      print('Generative perplexity:',
+            model.gen_ppl_metric.compute())
   return text_samples
 
 def _ppl_eval(config, logger, tokenizer):
