@@ -104,6 +104,51 @@ def create_tower_schematic(block_size=32, center_x=16, center_z=16, height=20, w
   return schematic
 
 
+def create_well_schematic(block_size=32, center_x=16, center_z=16, outer_radius=5, inner_radius=3, height=15, block_id=1):
+  """Create a well schematic in the same format as schematic.npy files.
+  
+  A well has:
+  - Outer circular wall
+  - Inner hollow space (well hole)
+  - Can extend above ground (well structure)
+  
+  Args:
+    block_size: Size of the voxel grid (default: 32)
+    center_x: X coordinate of well center (default: 16)
+    center_z: Z coordinate of well center (default: 16)
+    outer_radius: Outer radius of the well (default: 5)
+    inner_radius: Inner radius (hollow space, default: 3)
+    height: Height of the well structure (default: 15)
+    block_id: Block ID to use for the well (default: 1)
+    
+  Returns:
+    numpy array of shape (block_size, block_size, block_size, 2) with well blocks
+  """
+  schematic = np.zeros((block_size, block_size, block_size, 2), dtype=np.uint8)
+  
+  # Create a well (hollow circular structure)
+  # Start from y=0 and go up to height
+  for y in range(min(height, block_size)):
+    # Iterate over all positions in a square around the center
+    for dx in range(-outer_radius, outer_radius + 1):
+      for dz in range(-outer_radius, outer_radius + 1):
+        x = center_x + dx
+        z = center_z + dz
+        
+        # Check bounds
+        if 0 <= x < block_size and 0 <= z < block_size:
+          # Calculate distance from center
+          distance = np.sqrt(dx**2 + dz**2)
+          
+          # Place block if it's in the outer ring (between inner and outer radius)
+          if inner_radius <= distance <= outer_radius:
+            # Place block at (y, z, x)
+            schematic[y, z, x, 0] = block_id
+            schematic[y, z, x, 1] = 0
+  
+  return schematic
+
+
 def load_coords_from_schematic(schematic_path, block_size=32):
   """Load coordinates from a schematic file and convert to (x, y, z) format.
   
@@ -338,78 +383,79 @@ def generate_samples(config, logger, tokenizer):
       # Adjust batch size to 1 when using coordinate file
       eval_batch_size = 1
       logger.info(f'Using coordinate file, setting batch size to 1')
+      logger.info(f'Prepared coordinates tensor: shape={coords.shape}, {len(file_coords)} non-padding positions')
     else:
       # Load from dataset as before
       dataset_name = 'training' if use_train_set else 'validation'
-    logger.info(f'Loading coordinates from {dataset_name} dataset...')
-    import dataloader
-    if use_train_set:
-      train_ds, _ = dataloader.get_dataloaders(
-        config, tokenizer, skip_valid=True, valid_seed=config.seed)
-      source_ds = train_ds
-    else:
-      _, valid_ds = dataloader.get_dataloaders(
-        config, tokenizer, skip_train=True, valid_seed=config.seed)
-      source_ds = valid_ds
-    # Get a batch from the dataloader
-    import random
-    batch_index = getattr(config.eval, 'batch_index', None)
-    sample_index_in_batch = getattr(config.eval, 'sample_index_in_batch', None)
-    
-    ds_iter = iter(source_ds)
-    num_batches = len(source_ds)
-    
-    if batch_index is not None:
-      # Use specific batch index
-      if batch_index >= num_batches:
-        logger.warning(f'batch_index {batch_index} is >= number of batches ({num_batches}), using batch 0 instead')
-        batch_index = 0
-      logger.info(f'Using batch index: {batch_index} (total batches: {num_batches})')
-      for _ in range(batch_index):
-        try:
-          next(ds_iter)
-        except StopIteration:
-          ds_iter = iter(source_ds)
-          break
-    else:
-      # Random batch selection (default behavior)
-      num_skip = random.randint(0, min(10, num_batches - 1))
-      logger.info(f'Randomly selecting batch (skipping {num_skip} batches)')
-      for _ in range(num_skip):
-        try:
-          next(ds_iter)
-        except StopIteration:
-          ds_iter = iter(source_ds)
-          break
-    
-    batch = next(ds_iter)
-    coords = batch['coords']  # Shape: (batch_size, seq_len, 3)
-    ground_truth_blocks = batch['input_ids']  # Shape: (batch_size, seq_len) - ground truth block IDs
-    attention_mask = batch['attention_mask']  # Shape: (batch_size, seq_len) - 1 for real tokens, 0 for padding
-    pad_token_id = tokenizer.pad_token_id if hasattr(tokenizer, 'pad_token_id') else 0
-    
-    # Select specific sample index if provided
-    if sample_index_in_batch is not None:
-      batch_size = coords.shape[0]
-      if sample_index_in_batch >= batch_size:
-        logger.warning(f'sample_index_in_batch {sample_index_in_batch} is >= batch size ({batch_size}), using index 0 instead')
-        sample_index_in_batch = 0
-      logger.info(f'Using sample index {sample_index_in_batch} from batch (batch size: {batch_size})')
-      coords = coords[sample_index_in_batch:sample_index_in_batch+1]  # Keep batch dimension
-      ground_truth_blocks = ground_truth_blocks[sample_index_in_batch:sample_index_in_batch+1]
-      attention_mask = attention_mask[sample_index_in_batch:sample_index_in_batch+1] if attention_mask is not None else None
-    
-    # Ensure coordinates match eval_batch_size for sampling (if not using specific sample index)
-    eval_batch_size = config.loader.eval_batch_size
-    if sample_index_in_batch is None and coords.shape[0] != eval_batch_size:
-      logger.info(f'Adjusting batch size from {coords.shape[0]} to {eval_batch_size} for sampling')
-      coords = coords[:eval_batch_size]
-      ground_truth_blocks = ground_truth_blocks[:eval_batch_size]
-      attention_mask = attention_mask[:eval_batch_size] if attention_mask is not None else None
-    
-    logger.info(f'Loaded coordinates shape: {coords.shape}')
-    logger.info(f'Loaded ground truth blocks shape: {ground_truth_blocks.shape}')
-    logger.info(f'Loaded attention mask shape: {attention_mask.shape}')
+      logger.info(f'Loading coordinates from {dataset_name} dataset...')
+      import dataloader
+      if use_train_set:
+        train_ds, _ = dataloader.get_dataloaders(
+          config, tokenizer, skip_valid=True, valid_seed=config.seed)
+        source_ds = train_ds
+      else:
+        _, valid_ds = dataloader.get_dataloaders(
+          config, tokenizer, skip_train=True, valid_seed=config.seed)
+        source_ds = valid_ds
+      # Get a batch from the dataloader
+      import random
+      batch_index = getattr(config.eval, 'batch_index', None)
+      sample_index_in_batch = getattr(config.eval, 'sample_index_in_batch', None)
+      
+      ds_iter = iter(source_ds)
+      num_batches = len(source_ds)
+      
+      if batch_index is not None:
+        # Use specific batch index
+        if batch_index >= num_batches:
+          logger.warning(f'batch_index {batch_index} is >= number of batches ({num_batches}), using batch 0 instead')
+          batch_index = 0
+        logger.info(f'Using batch index: {batch_index} (total batches: {num_batches})')
+        for _ in range(batch_index):
+          try:
+            next(ds_iter)
+          except StopIteration:
+            ds_iter = iter(source_ds)
+            break
+      else:
+        # Random batch selection (default behavior)
+        num_skip = random.randint(0, min(10, num_batches - 1))
+        logger.info(f'Randomly selecting batch (skipping {num_skip} batches)')
+        for _ in range(num_skip):
+          try:
+            next(ds_iter)
+          except StopIteration:
+            ds_iter = iter(source_ds)
+            break
+      
+      batch = next(ds_iter)
+      coords = batch['coords']  # Shape: (batch_size, seq_len, 3)
+      ground_truth_blocks = batch['input_ids']  # Shape: (batch_size, seq_len) - ground truth block IDs
+      attention_mask = batch['attention_mask']  # Shape: (batch_size, seq_len) - 1 for real tokens, 0 for padding
+      pad_token_id = tokenizer.pad_token_id if hasattr(tokenizer, 'pad_token_id') else 0
+      
+      # Select specific sample index if provided
+      if sample_index_in_batch is not None:
+        batch_size = coords.shape[0]
+        if sample_index_in_batch >= batch_size:
+          logger.warning(f'sample_index_in_batch {sample_index_in_batch} is >= batch size ({batch_size}), using index 0 instead')
+          sample_index_in_batch = 0
+        logger.info(f'Using sample index {sample_index_in_batch} from batch (batch size: {batch_size})')
+        coords = coords[sample_index_in_batch:sample_index_in_batch+1]  # Keep batch dimension
+        ground_truth_blocks = ground_truth_blocks[sample_index_in_batch:sample_index_in_batch+1]
+        attention_mask = attention_mask[sample_index_in_batch:sample_index_in_batch+1] if attention_mask is not None else None
+      
+      # Ensure coordinates match eval_batch_size for sampling (if not using specific sample index)
+      eval_batch_size = config.loader.eval_batch_size
+      if sample_index_in_batch is None and coords.shape[0] != eval_batch_size:
+        logger.info(f'Adjusting batch size from {coords.shape[0]} to {eval_batch_size} for sampling')
+        coords = coords[:eval_batch_size]
+        ground_truth_blocks = ground_truth_blocks[:eval_batch_size]
+        attention_mask = attention_mask[:eval_batch_size] if attention_mask is not None else None
+      
+      logger.info(f'Loaded coordinates shape: {coords.shape}')
+      logger.info(f'Loaded ground truth blocks shape: {ground_truth_blocks.shape}')
+      logger.info(f'Loaded attention mask shape: {attention_mask.shape}')
   
   if not is_craft3d and hasattr(model, 'gen_ppl_metric'):
     model.gen_ppl_metric.reset()
