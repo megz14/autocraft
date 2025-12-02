@@ -70,6 +70,61 @@ def _print_config(
       rich.print(tree, file=fp)
 
 
+
+def load_coords_from_schematic(schematic_path, block_size=32):
+  """Load coordinates from a schematic file and convert to (x, y, z) format.
+  
+  Args:
+    schematic_path: Path to schematic.npy file
+    block_size: Size of the voxel grid (default: 32)
+    
+  Returns:
+    tuple: (coords, block_ids) where:
+      - coords: numpy array of shape (N, 3) with (x, y, z) coordinates
+      - block_ids: numpy array of shape (N,) with block IDs
+  """
+  schematic = np.load(schematic_path)
+  
+  # Extract block IDs (channel 0)
+  if len(schematic.shape) == 4:
+    block_ids_array = schematic[..., 0]  # Shape: (y, z, x)
+  else:
+    block_ids_array = schematic
+  
+  # Find all occupied blocks
+  occupied = np.where(block_ids_array > 0)
+  
+  if len(occupied[0]) == 0:
+    return np.array([]), np.array([])
+  
+  # Extract coordinates
+  # schematic uses (y, z, x) format
+  y_coords = occupied[0]
+  z_coords = occupied[1]
+  x_coords = occupied[2]
+  block_ids = block_ids_array[occupied]
+  
+  # Convert to (x, y, z) format and center at (0, 0, 0)
+  coords_list = []
+  block_ids_list = []
+  
+  offset = block_size // 2
+  
+  for i in range(len(x_coords)):
+    x = x_coords[i] - offset  # Center at 0
+    y = y_coords[i] - offset
+    z = z_coords[i] - offset
+    block_id = block_ids[i]
+    
+    coords_list.append([x, y, z])
+    block_ids_list.append(block_id)
+  
+  coords = np.array(coords_list, dtype=np.float32)
+  block_ids = np.array(block_ids_list, dtype=np.int64)
+  
+  return coords, block_ids
+
+
 def _blocks_to_schematic(block_ids, coords, attention_mask=None, pad_token_id=0, block_size=32):
   """Convert block IDs and coordinates to a voxel grid schematic.
   
@@ -208,13 +263,51 @@ def generate_samples(config, logger, tokenizer):
   
   # For Craft3D, get coordinates and ground truth blocks from dataset
   # Default to validation set, but allow override via config
+  # Or load from a coordinate file if specified
   use_train_set = getattr(config.eval, 'sample_from_train', False)
+  coordinate_file = getattr(config.eval, 'coordinate_file', None)
   coords = None
   ground_truth_blocks = None
   attention_mask = None
   pad_token_id = None
   if is_craft3d:
-    dataset_name = 'training' if use_train_set else 'validation'
+    pad_token_id = tokenizer.pad_token_id if hasattr(tokenizer, 'pad_token_id') else 0
+    
+    # Check if we should load coordinates from a file
+    if coordinate_file is not None:
+      logger.info(f'Loading coordinates from file: {coordinate_file}')
+      file_coords, file_block_ids = load_coords_from_schematic(coordinate_file, block_size=32)
+      
+      if len(file_coords) == 0:
+        raise ValueError(f'No occupied blocks found in coordinate file: {coordinate_file}')
+      
+      logger.info(f'Loaded {len(file_coords)} coordinates from file')
+      logger.info(f'Coordinate range: X=[{file_coords[:, 0].min():.1f}, {file_coords[:, 0].max():.1f}], '
+                  f'Y=[{file_coords[:, 1].min():.1f}, {file_coords[:, 1].max():.1f}], '
+                  f'Z=[{file_coords[:, 2].min():.1f}, {file_coords[:, 2].max():.1f}]')
+      
+      # Convert to tensors and prepare for sampling
+      seq_len = config.model.length
+      num_coords = len(file_coords)
+      
+      # Create coordinates tensor with padding if needed
+      coords_tensor = torch.zeros((1, seq_len, 3), dtype=torch.float32)
+      coords_tensor[0, :num_coords] = torch.from_numpy(file_coords)
+      
+      # Create attention mask (1 for real coordinates, 0 for padding)
+      attention_mask_tensor = torch.zeros((1, seq_len), dtype=torch.long)
+      attention_mask_tensor[0, :num_coords] = 1
+      
+      coords = coords_tensor
+      attention_mask = attention_mask_tensor
+      ground_truth_blocks = None  # No ground truth when using coordinate file
+      
+      # Adjust batch size to 1 when using coordinate file
+      eval_batch_size = 1
+      logger.info(f'Using coordinate file, setting batch size to 1')
+    else:
+      # Load from dataset as before
+      dataset_name = 'training' if use_train_set else 'validation'
     logger.info(f'Loading coordinates from {dataset_name} dataset...')
     import dataloader
     if use_train_set:
