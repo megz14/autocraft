@@ -20,6 +20,59 @@ class Craft3DDataset(Dataset):
     NUM_BLOCK_TYPES = 256
     URL = "https://craftassist.s3-us-west-2.amazonaws.com/pubr/house_data.tar.gz"
 
+    @staticmethod
+    def _resolve_data_dir_init(data_dir: str) -> str:
+        """Resolve data directory path, handling relative paths correctly.
+        
+        This method tries to resolve relative paths by looking for the dataset
+        directory in common locations, especially when running from Hydra output directories.
+        """
+        # If it's already an absolute path, use it as-is
+        if osp.isabs(data_dir):
+            return data_dir
+        
+        # Try resolving relative to current working directory first
+        abs_path = osp.abspath(data_dir)
+        if osp.exists(abs_path):
+            return abs_path
+        
+        # If not found, search up the directory tree to find project root
+        # and try resolving relative to that (Hydra changes cwd to output dir)
+        current = os.getcwd()
+        max_levels = 10  # Limit search depth
+        
+        for level in range(max_levels):
+            # Check if current directory contains the dataset
+            candidate = osp.join(current, data_dir)
+            if osp.exists(candidate):
+                return osp.abspath(candidate)
+            
+            # Look for project root indicators - check if we're in the mdlm directory
+            # (which contains main.py) or if mdlm is a subdirectory
+            if osp.exists(osp.join(current, "main.py")):
+                # Found main.py in current directory - this is the mdlm directory
+                candidate = osp.join(current, data_dir)
+                if osp.exists(candidate):
+                    return osp.abspath(candidate)
+            elif osp.exists(osp.join(current, "mdlm", "main.py")):
+                # Found mdlm subdirectory with main.py
+                candidate = osp.join(current, "mdlm", data_dir)
+                if osp.exists(candidate):
+                    return osp.abspath(candidate)
+                # Also try without mdlm prefix
+                candidate = osp.join(current, data_dir)
+                if osp.exists(candidate):
+                    return osp.abspath(candidate)
+            
+            # Move up one level
+            parent = osp.dirname(current)
+            if parent == current:  # Reached filesystem root
+                break
+            current = parent
+        
+        # Fall back to absolute path from current directory (will be created if needed)
+        return abs_path
+
     def __init__(
         self,
         data_dir: str,
@@ -32,7 +85,8 @@ class Craft3DDataset(Dataset):
         logger: Optional[logging.Logger] = None,
     ):
         super().__init__()
-        self.data_dir = data_dir
+        # Resolve data directory path properly (handle relative paths)
+        self.data_dir = Craft3DDataset._resolve_data_dir_init(data_dir)
         self.subset = subset
         self.local_size = local_size
         self.global_size = global_size
@@ -204,7 +258,7 @@ class Craft3DDataset(Dataset):
 
     def _has_raw_data(self) -> bool:
         """Check if dataset already exists (houses directory with data files and splits.json)."""
-        # Use absolute paths to avoid path resolution issues
+        # self.data_dir is already resolved during initialization
         data_dir_abs = osp.abspath(self.data_dir)
         houses_dir = osp.join(data_dir_abs, "houses")
         splits_path = osp.join(data_dir_abs, "splits.json")
@@ -262,6 +316,7 @@ class Craft3DDataset(Dataset):
             self._log(f"Dataset already exists at {houses_dir}, skipping download and extraction.")
             return
         
+        # self.data_dir is already resolved during initialization
         data_dir_abs = osp.abspath(self.data_dir)
         os.makedirs(data_dir_abs, exist_ok=True)
 
