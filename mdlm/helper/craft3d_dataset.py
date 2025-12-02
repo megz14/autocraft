@@ -203,24 +203,23 @@ class Craft3DDataset(Dataset):
             self.logger.info(msg)
 
     def _has_raw_data(self) -> bool:
-        """Check if dataset already exists (houses directory or schematic files)."""
+        """Check if dataset already exists (houses directory with data files and splits.json)."""
         houses_dir = osp.join(self.data_dir, "houses")
         splits_path = osp.join(self.data_dir, "splits.json")
         
-        # Check if splits.json exists (required for dataset loading)
+        # Check if splits.json exists (required for loading the dataset)
         if not osp.isfile(splits_path):
             return False
         
-        # Check if houses directory exists and has content
+        # If houses directory exists and has content, data is already there
         if not osp.isdir(houses_dir):
             return False
-        
-        # Check if there are any house directories with data files
+            
         try:
             items = os.listdir(houses_dir)
             if len(items) == 0:
                 return False
-            
+                
             # Check if at least one house has data files
             for item in items:
                 house_path = osp.join(houses_dir, item)
@@ -236,18 +235,19 @@ class Craft3DDataset(Dataset):
 
     def _download(self):
         """Download dataset only if it doesn't already exist."""
-        # Check if data already exists using the same logic as _has_raw_data
+        # Double-check that data doesn't already exist
         if self._has_raw_data():
             houses_dir = osp.join(self.data_dir, "houses")
-            self._log(f"Dataset already exists at {houses_dir}, skipping download.")
+            self._log(f"Dataset already exists at {houses_dir}, skipping download and extraction.")
             return
         
         os.makedirs(self.data_dir, exist_ok=True)
 
         tar_path = osp.join(self.data_dir, "houses.tar.gz")
-        if osp.isfile(tar_path):
-            self._log(f"Archive already exists at {tar_path}, skipping download.")
-        else:
+        extracted_dir = osp.join(self.data_dir, "houses")
+        
+        # Download if tar doesn't exist
+        if not osp.isfile(tar_path):
             self._log(f"Downloading dataset from {Craft3DDataset.URL}")
             response = requests.get(Craft3DDataset.URL, allow_redirects=True)
             if response.status_code != 200:
@@ -258,15 +258,19 @@ class Craft3DDataset(Dataset):
             with open(tar_path, "wb") as f:
                 f.write(response.content)
             self._log(f"Download complete. Saved to {tar_path}")
-
-        extracted_dir = osp.join(self.data_dir, "houses")
-        if osp.isdir(extracted_dir):
-            self._log(f"Dataset already extracted at {extracted_dir}, skipping extraction.")
         else:
-            self._log(f"Extracting dataset to {extracted_dir}")
-            tar = tarfile.open(tar_path, "r")
-            tar.extractall(self.data_dir)
-            self._log(f"Extraction complete.")
+            self._log(f"Archive already exists at {tar_path}, skipping download.")
+
+        # Extract if not already extracted (check again after potential download)
+        if self._has_raw_data():
+            self._log(f"Dataset already extracted at {extracted_dir}, skipping extraction.")
+            return
+        
+        self._log(f"Extracting dataset to {extracted_dir}")
+        tar = tarfile.open(tar_path, "r")
+        tar.extractall(self.data_dir)
+        tar.close()
+        self._log(f"Extraction complete.")
 
     def _load_dataset(self):
         splits_path = osp.join(self.data_dir, "splits.json")
