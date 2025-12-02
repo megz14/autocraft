@@ -7,6 +7,8 @@ import omegaconf
 import rich.syntax
 import rich.tree
 import torch
+import numpy as np
+from pathlib import Path
 
 import dataloader
 import diffusion
@@ -66,6 +68,74 @@ def _print_config(
       '{}/config_tree.txt'.format(
         config.checkpointing.save_dir), 'w') as fp:
       rich.print(tree, file=fp)
+
+
+def _blocks_to_schematic(block_ids, coords, attention_mask=None, pad_token_id=0, block_size=32):
+  """Convert block IDs and coordinates to a voxel grid schematic.
+  
+  Coordinates are centered at (0,0,0) and mapped to [0, block_size) range.
+  Matches normalized schematic.npy format: (y, z, x, 2) where channel 0 is block IDs.
+  
+  Args:
+    block_ids: Tensor of shape (seq_len,) containing block IDs
+    coords: Tensor of shape (seq_len, 3) containing (x, y, z) coordinates (centered at 0,0,0)
+    attention_mask: Optional tensor of shape (seq_len,) to filter padding
+    pad_token_id: Padding token ID to filter out
+    block_size: Size of the voxel grid (default: 32)
+    
+  Returns:
+    numpy array of shape (block_size, block_size, block_size, 2) matching schematic.npy format
+    Format: (y, z, x, 2) where channel 0 is block IDs, channel 1 is metadata (set to 0)
+  """
+  # Filter out padding positions
+  if attention_mask is not None:
+    valid_mask = (attention_mask == 1)
+    block_ids = block_ids[valid_mask]
+    coords = coords[valid_mask]
+  else:
+    # Filter out padding tokens
+    valid_mask = (block_ids != pad_token_id)
+    block_ids = block_ids[valid_mask]
+    coords = coords[valid_mask]
+  
+  # Convert to numpy
+  if isinstance(block_ids, torch.Tensor):
+    block_ids = block_ids.cpu().numpy()
+  if isinstance(coords, torch.Tensor):
+    coords = coords.cpu().numpy()
+  
+  # Create empty voxel grid (y, z, x, 2) format like normalized schematic.npy
+  schematic = np.zeros((block_size, block_size, block_size, 2), dtype=np.uint8)
+  
+  # Coordinates are centered at (0,0,0), so shift them to [0, block_size) range
+  offset = block_size // 2
+  
+  # Place blocks in the grid
+  for i in range(len(block_ids)):
+    block_id = int(block_ids[i])
+    x, y, z = coords[i]
+    
+    # Shift coordinates from centered at (0,0,0) to [0, block_size)
+    x = int(np.round(x + offset))
+    y = int(np.round(y + offset))
+    z = int(np.round(z + offset))
+    
+    # Clip to valid range [0, block_size)
+    x = np.clip(x, 0, block_size - 1)
+    y = np.clip(y, 0, block_size - 1)
+    z = np.clip(z, 0, block_size - 1)
+    
+    # Skip if block_id is padding (0)
+    if block_id == pad_token_id or block_id == 0:
+      continue
+    
+    # Place block in schematic (format is y, z, x, channels)
+    # Channel 0: block ID
+    # Channel 1: metadata (set to 0 for now since we don't have that info)
+    schematic[y, z, x, 0] = block_id
+    schematic[y, z, x, 1] = 0
+  
+  return schematic
 
 
 @L.pytorch.utilities.rank_zero_only
@@ -268,6 +338,40 @@ def generate_samples(config, logger, tokenizer):
         print(f'\nGenerated block IDs (first sample, all positions):')
         print(samples[0].cpu().tolist() if samples.shape[0] > 0 else samples.cpu().tolist())
       print('='*70 + '\n')
+      
+      # Save schematics for all samples
+      if samples is not None and coords is not None:
+        # Create output directory for schematics
+        output_dir = Path(os.getcwd()) / 'schematics'
+        output_dir.mkdir(exist_ok=True)
+        logger.info(f'Saving schematics to {output_dir}')
+        
+        batch_size = samples.shape[0]
+        for sample_idx in range(batch_size):
+          # Save generated schematic
+          gen_schematic = _blocks_to_schematic(
+            block_ids=samples[sample_idx],
+            coords=coords[sample_idx],
+            attention_mask=attention_mask[sample_idx] if attention_mask is not None else None,
+            pad_token_id=pad_token_id,
+            block_size=32
+          )
+          gen_path = output_dir / f'sample_{sample_idx:04d}_generated.npy'
+          np.save(gen_path, gen_schematic)
+          
+          # Save ground truth schematic if available
+          if ground_truth_blocks is not None:
+            gt_schematic = _blocks_to_schematic(
+              block_ids=ground_truth_blocks[sample_idx],
+              coords=coords[sample_idx],
+              attention_mask=attention_mask[sample_idx] if attention_mask is not None else None,
+              pad_token_id=pad_token_id,
+              block_size=32
+            )
+            gt_path = output_dir / f'sample_{sample_idx:04d}_ground_truth.npy'
+            np.save(gt_path, gt_schematic)
+        
+        logger.info(f'Saved {batch_size} generated schematics and {batch_size if ground_truth_blocks is not None else 0} ground truth schematics')
   else:
     print('Text samples:', text_samples)
     if not config.sampling.semi_ar and hasattr(model, 'gen_ppl_metric'):
