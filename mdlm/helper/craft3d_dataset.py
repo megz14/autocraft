@@ -270,6 +270,114 @@ class Craft3DDataset(Dataset):
         types_and_coords = [types_and_coords[i] for i in indices]
         return torch.tensor(types_and_coords, dtype=torch.int64)
 
+    def _normalize_coordinates(self, annotation: torch.Tensor, block_size: int = 32) -> Optional[torch.Tensor]:
+        """Normalize coordinates by centering around center of mass and resizing to block_size.
+        
+        Args:
+            annotation (torch.Tensor): Tensor of shape (N, 4) where each row is [block_type, x, y, z]
+            block_size (int): Target size for the normalized coordinates
+            
+        Returns:
+            torch.Tensor: Normalized annotation with coordinates centered at (0,0,0) and within [0, block_size),
+                         or None if empty
+        """
+        if len(annotation) == 0:
+            return None
+        
+        # Extract coordinates (x, y, z)
+        coords = annotation[:, 1:].float()  # Shape: (N, 3)
+        block_types = annotation[:, 0]  # Shape: (N,)
+        
+        # Calculate center of mass
+        center_of_mass = coords.mean(dim=0)  # Shape: (3,)
+        
+        # Center coordinates around (0, 0, 0)
+        centered_coords = coords - center_of_mass
+        
+        # Find the bounding box
+        min_coords = centered_coords.min(dim=0)[0]
+        max_coords = centered_coords.max(dim=0)[0]
+        
+        # Calculate scale to fit within block_size
+        coord_range = max_coords - min_coords
+        max_range = coord_range.max().item()
+        
+        if max_range > 0:
+            # Scale to fit within block_size (with some padding)
+            scale = (block_size - 2) / max_range  # Leave 1 voxel padding on each side
+            centered_coords = centered_coords * scale
+        
+        # Shift to positive coordinates (centered in block_size cube)
+        offset = torch.tensor([block_size / 2, block_size / 2, block_size / 2], dtype=torch.float32)
+        normalized_coords = centered_coords + offset
+        
+        # Clip to valid range [0, block_size)
+        normalized_coords = torch.clamp(normalized_coords, 0, block_size - 1)
+        
+        # Round to integers
+        normalized_coords = normalized_coords.round().long()
+        
+        # Combine block types and normalized coordinates
+        normalized_annotation = torch.cat([
+            block_types.unsqueeze(1),
+            normalized_coords
+        ], dim=1)
+        
+        return normalized_annotation
+
+    def _resize_schematic(self, schematic: np.ndarray, block_size: int = 32) -> Optional[np.ndarray]:
+        """Centers the schematic around the center of mass, resizes it to the block size and pads with zeroes.
+
+        Args:
+            schematic (np.ndarray): The schematic - of format: (y, z, x, entryshape)
+
+        Returns:
+            np.ndarray: the re-centered schematic
+        """
+        if schematic.sum() <= 0:
+            return None
+        
+        # Center the schematic around the center of mass
+        coords = np.array(schematic.nonzero())
+        if len(coords) == 0:
+            return None
+        
+        center_of_mass = np.mean(coords, axis=1)
+        center_of_mass = np.round(center_of_mass).astype(int)
+        schematic = np.roll(schematic, -center_of_mass, axis=(0, 1, 2))
+
+        # Resize the schematic to the block size
+        if schematic.shape[0] > block_size:
+            schematic = schematic[: block_size, :, :]
+        if schematic.shape[1] > block_size:
+            schematic = schematic[:, : block_size, :]
+        if schematic.shape[2] > block_size:
+            schematic = schematic[:, :, : block_size]
+
+        # Pad with zeroes
+        if schematic.shape[0] < block_size:
+            schematic = np.pad(
+                schematic,
+                ((0, block_size - schematic.shape[0]), (0, 0), (0, 0)),
+                mode="constant",
+                constant_values=0,
+            )
+        if schematic.shape[1] < block_size:
+            schematic = np.pad(
+                schematic,
+                ((0, 0), (0, block_size - schematic.shape[1]), (0, 0)),
+                mode="constant",
+                constant_values=0,
+            )
+        if schematic.shape[2] < block_size:
+            schematic = np.pad(
+                schematic,
+                ((0, 0), (0, 0), (0, block_size - schematic.shape[2])),
+                mode="constant",
+                constant_values=0,
+            )
+        return schematic
+
     def _find_valid_items(self):
         self._valid_indices = {}
         for i, annotation in enumerate(self._all_houses):

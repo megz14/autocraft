@@ -165,6 +165,7 @@ class TimestepEmbedder(nn.Module):
     """
     Create sinusoidal timestep embeddings.
     :param t: a 1-D Tensor of N indices, one per batch element.
+                      These may be fractional.
     :param dim: the dimension of the output.
     :param max_period: controls the minimum frequency of the embeddings.
     :return: an (N, D) Tensor of positional embeddings.
@@ -382,13 +383,13 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
 
     self.config = config
     self.vocab_size = vocab_size
-    self.coords = None
+
     self.vocab_embed = EmbeddingLayer(config.model.hidden_size,
                                       vocab_size)
     self.sigma_map = TimestepEmbedder(config.model.cond_dim)
     self.rotary_emb = Rotary(
       config.model.hidden_size // config.model.n_heads)
-    self.pos_emb_3d = PositionalEncoding3D(
+    self.pos_emb_3d = SinusoidalPositionalEmbedding3D(
       config.model.hidden_size)
 
     blocks = []
@@ -410,14 +411,12 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
       return bias_dropout_add_scale_fused_train
     else:
       return  bias_dropout_add_scale_fused_inference
-  def forward(self, indices, sigma, coords=None):
+
+  def forward(self, indices, sigma, coords):
     # coords shape (batch_size, seq_len, 3)
     # indices shape (batch_size, seq_len)
-    if coords is not None:
-        self.coords = coords
-
     x = self.vocab_embed(indices) # shape (batch_size, seq_len, hidden_size)
-    pos_emb = self.pos_emb_3d(self.coords).to(x.dtype) # shape (batch_size, seq_len, hidden_size)
+    pos_emb = self.pos_emb_3d(coords).to(x.dtype) # shape (batch_size, seq_len, hidden_size)
     x = x + pos_emb
     c = F.silu(self.sigma_map(sigma))
 

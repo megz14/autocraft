@@ -1,0 +1,12 @@
+# configs/data/craft3d.yaml
+type: craft3d
+train: craft3d_train
+valid: craft3d_val
+craft3d_dir: dataset/3dcraft
+train_split: train
+valid_split: val
+vocab_size: 2048
+pad_token_id: 0
+bos_token_id: 0
+eos_token_id: 0
+mask_token_id: 2047
