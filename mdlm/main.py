@@ -91,28 +91,37 @@ def generate_samples(config, logger, tokenizer):
   # Check if this is Craft3D data (doesn't have gen_ppl_metric)
   is_craft3d = getattr(config.data, "type", None) == "craft3d"
   
-  # For Craft3D, get coordinates and ground truth blocks from validation dataset
+  # For Craft3D, get coordinates and ground truth blocks from dataset
+  # Default to validation set, but allow override via config
+  use_train_set = getattr(config.eval, 'sample_from_train', False)
   coords = None
   ground_truth_blocks = None
   attention_mask = None
   pad_token_id = None
   if is_craft3d:
-    logger.info('Loading coordinates from validation dataset...')
+    dataset_name = 'training' if use_train_set else 'validation'
+    logger.info(f'Loading coordinates from {dataset_name} dataset...')
     import dataloader
-    _, valid_ds = dataloader.get_dataloaders(
-      config, tokenizer, skip_train=True, valid_seed=config.seed)
-    # Get a random batch from validation dataloader
+    if use_train_set:
+      train_ds, _ = dataloader.get_dataloaders(
+        config, tokenizer, skip_valid=True, valid_seed=config.seed)
+      source_ds = train_ds
+    else:
+      _, valid_ds = dataloader.get_dataloaders(
+        config, tokenizer, skip_train=True, valid_seed=config.seed)
+      source_ds = valid_ds
+    # Get a random batch from the dataloader
     import random
-    val_iter = iter(valid_ds)
+    ds_iter = iter(source_ds)
     # Skip a random number of batches for randomness
-    num_skip = random.randint(0, min(10, len(valid_ds) - 1))
+    num_skip = random.randint(0, min(10, len(source_ds) - 1))
     for _ in range(num_skip):
       try:
-        next(val_iter)
+        next(ds_iter)
       except StopIteration:
-        val_iter = iter(valid_ds)
+        ds_iter = iter(source_ds)
         break
-    batch = next(val_iter)
+    batch = next(ds_iter)
     coords = batch['coords']  # Shape: (batch_size, seq_len, 3)
     ground_truth_blocks = batch['input_ids']  # Shape: (batch_size, seq_len) - ground truth block IDs
     attention_mask = batch['attention_mask']  # Shape: (batch_size, seq_len) - 1 for real tokens, 0 for padding
