@@ -112,13 +112,8 @@ class Diffusion(L.LightningModule):
 
     self.noise = noise_schedule.get_noise(self.config,
                                           dtype=self.dtype)
-    if self.config.training.ema > 0:
-      self.ema = models.ema.ExponentialMovingAverage(
-        itertools.chain(self.backbone.parameters(),
-                        self.noise.parameters()),
-        decay=self.config.training.ema)
-    else:
-      self.ema = None
+    # EMA removed - not used for Craft3D training
+    self.ema = None
     
     self.lr = self.config.optim.lr
     self.sampling_eps = self.config.training.sampling_eps
@@ -144,8 +139,7 @@ class Diffusion(L.LightningModule):
     assert self.config.backbone == 'dit'
 
   def on_load_checkpoint(self, checkpoint):
-    if self.ema:
-      self.ema.load_state_dict(checkpoint['ema'])
+    # EMA removed - not used for Craft3D training
     # Copied from:
     # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py#L41
     self.fast_forward_epochs = checkpoint['loops'][
@@ -155,8 +149,7 @@ class Diffusion(L.LightningModule):
         'current']['completed']
 
   def on_save_checkpoint(self, checkpoint):
-    if self.ema:
-      checkpoint['ema'] = self.ema.state_dict()
+    # EMA removed - not used for Craft3D training
     # Copied from:
     # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/tasks/seq.py
     # ['epoch_loop.batch_progress']['total']['completed'] is 1 iteration
@@ -193,8 +186,7 @@ class Diffusion(L.LightningModule):
       checkpoint['sampler']['random_state'] = None
 
   def on_train_start(self):
-    if self.ema:
-      self.ema.move_shadow_params_to_device(self.device)
+    # EMA removed - not used for Craft3D training
     # Adapted from:
     # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
     distributed = (
@@ -231,10 +223,7 @@ class Diffusion(L.LightningModule):
 
   def optimizer_step(self, *args, **kwargs):
     super().optimizer_step(*args, **kwargs)
-    if self.ema:
-      self.ema.update(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
+    # EMA removed - not used for Craft3D training
 
   def _subs_parameterization(self, logits, xt):
     # log prob at the mask index = - infinity
@@ -374,13 +363,7 @@ class Diffusion(L.LightningModule):
     return loss
 
   def on_validation_epoch_start(self):
-    if self.ema:
-      self.ema.store(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
-      self.ema.copy_to(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
+    # EMA removed - not used for Craft3D training
     self.backbone.eval()
     self.noise.eval()
     assert self.valid_metrics.nll.mean_value == 0
@@ -409,10 +392,7 @@ class Diffusion(L.LightningModule):
           'unique_blocks': len(torch.unique(samples)) if samples is not None else 0
         }
         # Note: For Craft3D, we don't decode to text
-    if self.ema:
-      self.ema.restore(
-        itertools.chain(self.backbone.parameters(),
-                        self.noise.parameters()))
+    # EMA removed - not used for Craft3D training
 
   def configure_optimizers(self):
     # TODO(yair): Lightning currently giving this warning when using `fp16`:
@@ -563,20 +543,10 @@ class Diffusion(L.LightningModule):
   def restore_model_and_sample(self, num_steps, eps=1e-5):
     """Generate samples from the model."""
     # Lightning auto-casting is not working in this method for some reason
-    if self.ema:
-      self.ema.store(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
-      self.ema.copy_to(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
+    # EMA removed - not used for Craft3D training
     self.backbone.eval()
     self.noise.eval()
     samples = self._sample(num_steps=num_steps, eps=eps)
-    if self.ema:
-      self.ema.restore(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
     self.backbone.train()
     self.noise.train()
     return samples
@@ -843,13 +813,7 @@ class Diffusion(L.LightningModule):
       self, stride_length, num_strides, dt=0.001):
     """Generate samples from the model."""
     # Lightning auto-casting is not working in this method for some reason
-    if self.ema:
-      self.ema.store(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
-      self.ema.copy_to(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
+    # EMA removed - not used for Craft3D training
     self.backbone.eval()
     self.noise.eval()
     (sampling_steps, samples,
@@ -858,10 +822,6 @@ class Diffusion(L.LightningModule):
       stride_length=stride_length,
       num_strides=num_strides, 
       dt=dt)
-    if self.ema:
-      self.ema.restore(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
     self.backbone.train()
     self.noise.train()
     return sampling_steps, samples, sequence_lengths
