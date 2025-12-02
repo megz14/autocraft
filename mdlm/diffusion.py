@@ -392,19 +392,27 @@ class Diffusion(L.LightningModule):
     Raises:
       RuntimeError: If coordinates cannot be obtained from the validation dataloader
     """
-    if self.trainer is None:
+    # Try to get trainer, but handle case where it's not available
+    trainer = None
+    try:
+      trainer = self.trainer
+    except RuntimeError:
+      # Trainer is not attached (e.g., during sample_eval mode)
+      trainer = None
+    
+    if trainer is None:
       raise RuntimeError(
         "Cannot get coordinates from eval batch: trainer is not available. "
-        "Coordinates must be provided explicitly or trainer must be available."
+        "Coordinates must be provided explicitly via the coords parameter."
       )
     
     # Get validation dataloader
     val_dataloader = None
-    if hasattr(self.trainer, 'val_dataloaders') and self.trainer.val_dataloaders and len(self.trainer.val_dataloaders) > 0:
-      val_dataloader = self.trainer.val_dataloaders[0]
-    elif hasattr(self.trainer, 'datamodule') and self.trainer.datamodule is not None:
-      if hasattr(self.trainer.datamodule, 'val_dataloader'):
-        val_dataloader = self.trainer.datamodule.val_dataloader()
+    if hasattr(trainer, 'val_dataloaders') and trainer.val_dataloaders and len(trainer.val_dataloaders) > 0:
+      val_dataloader = trainer.val_dataloaders[0]
+    elif hasattr(trainer, 'datamodule') and trainer.datamodule is not None:
+      if hasattr(trainer.datamodule, 'val_dataloader'):
+        val_dataloader = trainer.datamodule.val_dataloader()
     
     if val_dataloader is None:
       raise RuntimeError(
@@ -642,13 +650,19 @@ class Diffusion(L.LightningModule):
         x = self.forward(x, unet_conditioning, coords=coords).argmax(dim=-1)
     return x
 
-  def restore_model_and_sample(self, num_steps, eps=1e-5):
-    """Generate samples from the model."""
+  def restore_model_and_sample(self, num_steps, eps=1e-5, coords=None):
+    """Generate samples from the model.
+    
+    Args:
+      num_steps: Number of sampling steps
+      eps: Minimum timestep value
+      coords: Optional 3D coordinates for positional embeddings
+    """
     # Lightning auto-casting is not working in this method for some reason
     # EMA removed - not used for Craft3D training
     self.backbone.eval()
     self.noise.eval()
-    samples = self._sample(num_steps=num_steps, eps=eps)
+    samples = self._sample(num_steps=num_steps, eps=eps, coords=coords)
     self.backbone.train()
     self.noise.train()
     return samples

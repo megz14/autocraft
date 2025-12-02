@@ -91,6 +91,28 @@ def generate_samples(config, logger, tokenizer):
   # Check if this is Craft3D data (doesn't have gen_ppl_metric)
   is_craft3d = getattr(config.data, "type", None) == "craft3d"
   
+  # For Craft3D, get coordinates from validation dataset
+  coords = None
+  if is_craft3d:
+    logger.info('Loading coordinates from validation dataset...')
+    import dataloader
+    _, valid_ds = dataloader.get_dataloaders(
+      config, tokenizer, skip_train=True, valid_seed=config.seed)
+    # Get a random batch from validation dataloader
+    import random
+    val_iter = iter(valid_ds)
+    # Skip a random number of batches for randomness
+    num_skip = random.randint(0, min(10, len(valid_ds) - 1))
+    for _ in range(num_skip):
+      try:
+        next(val_iter)
+      except StopIteration:
+        val_iter = iter(valid_ds)
+        break
+    batch = next(val_iter)
+    coords = batch['coords']  # Shape: (batch_size, seq_len, 3)
+    logger.info(f'Loaded coordinates shape: {coords.shape}')
+  
   if not is_craft3d and hasattr(model, 'gen_ppl_metric'):
     model.gen_ppl_metric.reset()
     
@@ -116,8 +138,13 @@ def generate_samples(config, logger, tokenizer):
       # and diffusion.compute_generative_perplexity() discards
       # any text after the first EOS token.
     else:
-      samples = model.restore_model_and_sample(
-        num_steps=config.sampling.steps)
+      if is_craft3d and coords is not None:
+        # Pass coordinates directly to sampling
+        samples = model.restore_model_and_sample(
+          num_steps=config.sampling.steps, coords=coords.to(model.device))
+      else:
+        samples = model.restore_model_and_sample(
+          num_steps=config.sampling.steps)
       if is_craft3d:
         # For Craft3D, samples are block IDs (not text)
         logger.info(f'Generated samples shape: {samples.shape}')
