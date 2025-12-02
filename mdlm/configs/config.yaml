@@ -55,6 +55,7 @@ eval:
   sample_from_train: False  # If True, sample from training set; if False, sample from validation set
   batch_index: null  # If set, use this specific batch index (0-based). If null, randomly select a batch.
   sample_index_in_batch: null  # If set, use only this sample index from the batch (0-based). If null, use all samples up to eval_batch_size.
+  coordinate_file: null  # Path to schematic.npy file to load coordinates from. If set, uses coordinates from this file instead of dataset.
 
 optim:
   weight_decay: 0
