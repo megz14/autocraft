@@ -5,8 +5,8 @@ valid: craft3d_val
 craft3d_dir: dataset/3dcraft
 train_split: train
 valid_split: val
-vocab_size: 2048
+vocab_size: 256  # 256 block types (0-255)
 pad_token_id: 0
 bos_token_id: 0
 eos_token_id: 0
-mask_token_id: 2047
+mask_token_id: 256  # Mask token (model will add +1 to vocab_size, making it 257)
