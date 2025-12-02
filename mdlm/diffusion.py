@@ -86,10 +86,13 @@ class Diffusion(L.LightningModule):
       self.vocab_size += 1
     else:
       self.mask_index = self.tokenizer.mask_token_id
-      # If mask_token_id is >= vocab_size, we need to increase vocab_size
-      # to accommodate it (vocab_size should be max(block_types) + 1 if mask is outside)
+      # Ensure vocab_size is large enough to accommodate mask_token_id
+      # vocab_size must be at least mask_token_id + 1 (since indices are 0-indexed)
       if self.mask_index >= self.vocab_size:
         self.vocab_size = self.mask_index + 1
+      # Also ensure vocab_size is large enough for any block IDs in data (0-252)
+      # This ensures we can handle block IDs 0-252 plus mask at 256
+      self.vocab_size = max(self.vocab_size, 257)  # At least 257 for block IDs 0-252 + mask at 256
     self.parameterization = self.config.parameterization
     
     # Only support DIT backbone
@@ -376,10 +379,103 @@ class Diffusion(L.LightningModule):
   def validation_step(self, batch, batch_idx):
     return self._compute_loss(batch, prefix='val')
 
+  def _get_coords_from_eval_batch(self, batch_size, seq_len):
+    """Get coordinates from a random batch in the validation dataloader.
+    
+    Args:
+      batch_size: Number of samples to get
+      seq_len: Sequence length
+      
+    Returns:
+      torch.Tensor: Coordinates of shape (batch_size, seq_len, 3)
+      
+    Raises:
+      RuntimeError: If coordinates cannot be obtained from the validation dataloader
+    """
+    if self.trainer is None:
+      raise RuntimeError(
+        "Cannot get coordinates from eval batch: trainer is not available. "
+        "Coordinates must be provided explicitly or trainer must be available."
+      )
+    
+    # Get validation dataloader
+    val_dataloader = None
+    if hasattr(self.trainer, 'val_dataloaders') and self.trainer.val_dataloaders and len(self.trainer.val_dataloaders) > 0:
+      val_dataloader = self.trainer.val_dataloaders[0]
+    elif hasattr(self.trainer, 'datamodule') and self.trainer.datamodule is not None:
+      if hasattr(self.trainer.datamodule, 'val_dataloader'):
+        val_dataloader = self.trainer.datamodule.val_dataloader()
+    
+    if val_dataloader is None:
+      raise RuntimeError(
+        "Cannot get coordinates from eval batch: validation dataloader is not available. "
+        "Coordinates must be provided explicitly."
+      )
+    
+    # Get a random batch from the validation dataloader
+    try:
+      # Create an iterator
+      val_iter = iter(val_dataloader)
+      
+      # Randomly skip some batches to get a random one (up to 10 batches)
+      import random
+      num_skip = random.randint(0, min(10, len(val_dataloader) - 1))
+      for _ in range(num_skip):
+        try:
+          next(val_iter)
+        except StopIteration:
+          val_iter = iter(val_dataloader)
+          break
+      
+      # Get a batch
+      batch = next(val_iter)
+      
+      # Extract coordinates from the batch
+      if isinstance(batch, dict) and 'coords' in batch:
+        coords = batch['coords']  # Shape: (batch_size, seq_len, 3)
+        # Move to correct device
+        coords = coords.to(self.device)
+        
+        # Handle batch size mismatch
+        if coords.shape[0] < batch_size:
+          # If batch is smaller, repeat it
+          num_repeats = (batch_size // coords.shape[0]) + 1
+          coords = coords.repeat(num_repeats, 1, 1)[:batch_size]
+        elif coords.shape[0] > batch_size:
+          # If batch is larger, take first batch_size samples
+          coords = coords[:batch_size]
+        
+        # Ensure sequence length matches
+        if coords.shape[1] != seq_len:
+          # Pad or truncate to match seq_len
+          if coords.shape[1] < seq_len:
+            padding = torch.zeros(coords.shape[0], seq_len - coords.shape[1], 3, 
+                                 device=coords.device, dtype=coords.dtype)
+            coords = torch.cat([coords, padding], dim=1)
+          else:
+            coords = coords[:, :seq_len]
+        
+        return coords.to(torch.float32)
+      else:
+        raise RuntimeError(
+          "Cannot get coordinates from eval batch: batch does not contain 'coords' key. "
+          f"Batch keys: {list(batch.keys()) if isinstance(batch, dict) else type(batch)}"
+        )
+    except StopIteration:
+      raise RuntimeError(
+        "Cannot get coordinates from eval batch: validation dataloader is empty. "
+        "Coordinates must be provided explicitly."
+      )
+    except (AttributeError, KeyError, TypeError) as e:
+      raise RuntimeError(
+        f"Cannot get coordinates from eval batch: {type(e).__name__}: {str(e)}. "
+        "Coordinates must be provided explicitly."
+      ) from e
+
   def on_validation_epoch_end(self):
     if ((self.config.eval.compute_perplexity_on_sanity
          or not self.trainer.sanity_checking)
-         and self.config.eval.generate_samples):
+        and self.config.eval.generate_samples):
       # Generate samples (block IDs for Craft3D)
       samples = None
       for _ in range(
@@ -494,8 +590,12 @@ class Diffusion(L.LightningModule):
     Args:
       num_steps: Number of sampling steps
       eps: Minimum timestep value
-      coords: Optional 3D coordinates for positional embeddings. If None and 
-              using DIT backbone, will generate placeholder coords (zeros).
+      coords: Optional 3D coordinates for positional embeddings. If None, will 
+              attempt to get coordinates from a random validation batch. If that 
+              fails, raises RuntimeError.
+              
+    Raises:
+      RuntimeError: If coords is None and cannot be obtained from validation dataloader
     """
     batch_size_per_gpu = self.config.loader.eval_batch_size
     # Lightning auto-casting is not working in this method for some reason
@@ -505,13 +605,11 @@ class Diffusion(L.LightningModule):
       batch_size_per_gpu,
       self.config.model.length).to(self.device)
     
-    # Generate placeholder coords if needed for DIT backbone
+    # Get coordinates from eval batch if not provided
     if coords is None:
-      # Create zero-padded coords as placeholder during sampling
-      # Shape: (batch_size, seq_len, 3)
-      coords = torch.zeros(
-        batch_size_per_gpu, self.config.model.length, 3,
-        device=self.device, dtype=torch.float32)
+      # Sample coordinates from a random validation batch
+      coords = self._get_coords_from_eval_batch(
+        batch_size_per_gpu, self.config.model.length)
     
     timesteps = torch.linspace(
       1, eps, num_steps + 1, device=self.device)
