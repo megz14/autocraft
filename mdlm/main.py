@@ -70,6 +70,39 @@ def _print_config(
       rich.print(tree, file=fp)
 
 
+def create_tower_schematic(block_size=32, center_x=16, center_z=16, height=20, width=3, block_id=1):
+  """Create a tower schematic in the same format as schematic.npy files.
+  
+  Args:
+    block_size: Size of the voxel grid (default: 32)
+    center_x: X coordinate of tower center (default: 16)
+    center_z: Z coordinate of tower center (default: 16)
+    height: Height of the tower (default: 20)
+    width: Width of the tower (radius from center, default: 3)
+    block_id: Block ID to use for the tower (default: 1)
+    
+  Returns:
+    numpy array of shape (block_size, block_size, block_size, 2) with tower blocks
+  """
+  schematic = np.zeros((block_size, block_size, block_size, 2), dtype=np.uint8)
+  
+  # Create a tower (vertical column)
+  # Start from y=0 and go up to height
+  for y in range(min(height, block_size)):
+    # Create a square base
+    for dx in range(-width, width + 1):
+      for dz in range(-width, width + 1):
+        x = center_x + dx
+        z = center_z + dz
+        
+        # Check bounds
+        if 0 <= x < block_size and 0 <= z < block_size:
+          # Place block at (y, z, x)
+          schematic[y, z, x, 0] = block_id
+          schematic[y, z, x, 1] = 0
+  
+  return schematic
+
 
 def load_coords_from_schematic(schematic_path, block_size=32):
   """Load coordinates from a schematic file and convert to (x, y, z) format.
