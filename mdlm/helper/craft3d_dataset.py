@@ -205,22 +205,40 @@ class Craft3DDataset(Dataset):
     def _has_raw_data(self) -> bool:
         """Check if dataset already exists (houses directory or schematic files)."""
         houses_dir = osp.join(self.data_dir, "houses")
-        if osp.isdir(houses_dir):
-            # Check if there are any house directories with schematic.npy files
-            # (for normalized data) or placed.json files (for original data)
-            for item in os.listdir(houses_dir):
+        splits_path = osp.join(self.data_dir, "splits.json")
+        
+        # Check if splits.json exists (required for dataset loading)
+        if not osp.isfile(splits_path):
+            return False
+        
+        # Check if houses directory exists and has content
+        if not osp.isdir(houses_dir):
+            return False
+        
+        # Check if there are any house directories with data files
+        try:
+            items = os.listdir(houses_dir)
+            if len(items) == 0:
+                return False
+            
+            # Check if at least one house has data files
+            for item in items:
                 house_path = osp.join(houses_dir, item)
                 if osp.isdir(house_path):
                     # Check for either schematic.npy (normalized) or placed.json (original)
                     if (osp.isfile(osp.join(house_path, "schematic.npy")) or
                         osp.isfile(osp.join(house_path, "placed.json"))):
                         return True
+        except (OSError, PermissionError):
+            return False
+        
         return False
 
     def _download(self):
         """Download dataset only if it doesn't already exist."""
-        houses_dir = osp.join(self.data_dir, "houses")
-        if osp.isdir(houses_dir):
+        # Check if data already exists using the same logic as _has_raw_data
+        if self._has_raw_data():
+            houses_dir = osp.join(self.data_dir, "houses")
             self._log(f"Dataset already exists at {houses_dir}, skipping download.")
             return
         
