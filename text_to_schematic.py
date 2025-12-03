@@ -31,6 +31,8 @@ import numpy as np
 from tqdm.auto import tqdm
 from pathlib import Path
 from collections import defaultdict
+from scipy.spatial import ConvexHull
+from scipy.ndimage import binary_erosion, generate_binary_structure
 
 # Add parent directory to path for point-e imports
 autocraft_dir = Path(__file__).parent
@@ -79,7 +81,7 @@ def _blocks_to_schematic(block_ids, coords, attention_mask=None, pad_token_id=0,
     
     Args:
         block_ids: Tensor of shape (seq_len,) containing block IDs
-        coords: Tensor of shape (seq_len, 3) containing (x, y, z) coordinates (centered at 0,0,0)
+        coords: Tensor of shape (seq_len, 3) containing (y, z, x) coordinates (centered at 0,0,0)
         attention_mask: Optional tensor of shape (seq_len,) to filter padding
         pad_token_id: Padding token ID to filter out
         block_size: Size of the voxel grid (default: 32)
@@ -137,25 +139,25 @@ def _blocks_to_schematic(block_ids, coords, attention_mask=None, pad_token_id=0,
     
     for i in range(len(block_ids)):
         block_id = int(block_ids[i])
-        x, y, z = coords[i]
+        y, z, x = coords[i]  # Coordinates are in (y, z, x) format
         
         # Apply offset if needed
         if needs_shift:
-            x = x + offset
             y = y + offset
             z = z + offset
+            x = x + offset
         
         # Round to integers
-        x = int(np.round(x))
         y = int(np.round(y))
         z = int(np.round(z))
+        x = int(np.round(x))
         
         # Check bounds before clipping
-        x_valid = 0 <= x < block_size
         y_valid = 0 <= y < block_size
         z_valid = 0 <= z < block_size
+        x_valid = 0 <= x < block_size
         
-        if not (x_valid and y_valid and z_valid):
+        if not (y_valid and z_valid and x_valid):
             out_of_bounds_count += 1
             continue
         
@@ -184,62 +186,88 @@ def _blocks_to_schematic(block_ids, coords, attention_mask=None, pad_token_id=0,
     return schematic
 
 
-def extract_surface_voxels(voxel_grid, connectivity=6):
-    """Extract only surface/outer voxels from a voxel grid.
+def extract_surface_voxels_morphology(voxel_grid):
+    """Extract only surface/outer voxels using morphological erosion.
     
-    A surface voxel is one that has at least one empty neighbor.
+    Standard algorithm: Uses binary erosion to find interior voxels,
+    then subtracts from original to get surface shell.
     
     Args:
         voxel_grid: Boolean numpy array of shape (block_size, block_size, block_size)
                    True indicates occupied voxel
-        connectivity: Number of neighbors to check (6 or 26, default: 6)
-                    6 = face-adjacent only, 26 = all adjacent (slower but more accurate)
     
     Returns:
         Boolean numpy array of same shape, True only for surface voxels
     """
-    block_size = voxel_grid.shape[0]
-    surface_mask = np.zeros_like(voxel_grid, dtype=bool)
+    # Use scipy's optimized morphological operations
+    # Generate 6-connected structure element (face-adjacent neighbors only)
+    structure = generate_binary_structure(3, 1)  # 3D, connectivity=1 (6-connected)
     
-    # 6-connected neighbors (face-adjacent only)
-    neighbors_6 = [
-        (-1, 0, 0), (1, 0, 0),
-        (0, -1, 0), (0, 1, 0),
-        (0, 0, -1), (0, 0, 1),
-    ]
+    # Erode once to remove one layer from all sides - this gives interior voxels
+    eroded = binary_erosion(voxel_grid, structure=structure)
     
-    if connectivity == 6:
-        neighbors = neighbors_6
-    else:  # 26-connected
-        neighbors = []
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
-                for dz in [-1, 0, 1]:
-                    if (dx, dy, dz) != (0, 0, 0):
-                        neighbors.append((dx, dy, dz))
-    
-    # Check each occupied voxel
-    occupied_positions = np.argwhere(voxel_grid)
-    
-    for y, z, x in occupied_positions:
-        is_surface = False
-        
-        # Check all neighbors
-        for dy, dz, dx in neighbors:
-            ny, nz, nx = y + dy, z + dz, x + dx
-            
-            # If neighbor is out of bounds or empty, this is a surface voxel
-            if (ny < 0 or ny >= block_size or
-                nz < 0 or nz >= block_size or
-                nx < 0 or nx >= block_size or
-                not voxel_grid[ny, nz, nx]):
-                is_surface = True
-                break
-        
-        if is_surface:
-            surface_mask[y, z, x] = True
+    # Surface = original - interior (eroded part)
+    surface_mask = voxel_grid & ~eroded
     
     return surface_mask
+
+
+def extract_surface_voxels_convex_hull(coords, block_size):
+    """Extract surface points using convex hull before voxelization.
+    
+    This gets only the outermost boundary points of the point cloud.
+    
+    Args:
+        coords: Point cloud coordinates, shape (N, 3)
+        block_size: Size of voxel grid
+    
+    Returns:
+        Boolean mask of shape (block_size, block_size, block_size) with only surface voxels
+    """
+    if len(coords) < 4:  # Need at least 4 points for 3D convex hull
+        # Too few points, return all as surface
+        voxel_grid = np.zeros((block_size, block_size, block_size), dtype=bool)
+        for coord in coords:
+            x, y, z = coord
+            x_idx = int(np.floor(x))
+            y_idx = int(np.floor(y))
+            z_idx = int(np.floor(z))
+            if 0 <= x_idx < block_size and 0 <= y_idx < block_size and 0 <= z_idx < block_size:
+                voxel_grid[y_idx, z_idx, x_idx] = True
+        return voxel_grid
+    
+    try:
+        # Compute convex hull - gives only outer boundary points
+        hull = ConvexHull(coords)
+        
+        # Get only the hull vertices (surface points)
+        hull_points = coords[hull.vertices]
+        
+        # Voxelize only the hull points
+        voxel_grid = np.zeros((block_size, block_size, block_size), dtype=bool)
+        
+        for point in hull_points:
+            x, y, z = point
+            x_idx = int(np.floor(x))
+            y_idx = int(np.floor(y))
+            z_idx = int(np.floor(z))
+            
+            if 0 <= x_idx < block_size and 0 <= y_idx < block_size and 0 <= z_idx < block_size:
+                voxel_grid[y_idx, z_idx, x_idx] = True
+        
+        return voxel_grid
+    except Exception as e:
+        print(f"  Warning: Convex hull failed ({e}), using all points")
+        # Fallback: voxelize all points
+        voxel_grid = np.zeros((block_size, block_size, block_size), dtype=bool)
+        for coord in coords:
+            x, y, z = coord
+            x_idx = int(np.floor(x))
+            y_idx = int(np.floor(y))
+            z_idx = int(np.floor(z))
+            if 0 <= x_idx < block_size and 0 <= y_idx < block_size and 0 <= z_idx < block_size:
+                voxel_grid[y_idx, z_idx, x_idx] = True
+        return voxel_grid
 
 
 def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface_only=False):
@@ -253,7 +281,8 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface
         surface_only: If True, only return surface/outer voxels, removing interior voxels (default: False)
     
     Returns:
-        numpy array of shape (N, 3) with (x, y, z) coordinates centered at (0, 0, 0)
+        numpy array of shape (N, 3) with (y, z, x) coordinates centered at (0, 0, 0)
+        Format matches Minecraft/schematic format: (y, z, x) where y is height
     """
     # Extract coordinates from point cloud
     if hasattr(point_cloud, 'coords'):
@@ -276,38 +305,39 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface
     coords_normalized = (coords - min_coords) / coord_range * block_size
     coords_normalized = np.clip(coords_normalized, 0, block_size - 1)
     
-    # Create voxel grid
-    voxel_grid = np.zeros((block_size, block_size, block_size), dtype=bool)
-    
-    for i in range(len(coords_normalized)):
-        x, y, z = coords_normalized[i]
-        # Convert to voxel indices
-        x_idx = int(np.floor(x))
-        y_idx = int(np.floor(y))
-        z_idx = int(np.floor(z))
-        
-        # Bounds check
-        if 0 <= x_idx < block_size and 0 <= y_idx < block_size and 0 <= z_idx < block_size:
-            voxel_grid[y_idx, z_idx, x_idx] = True
-    
-    # Extract surface voxels if requested
-    total_occupied = voxel_grid.sum()
+    # Extract surface using convex hull if requested (before voxelization)
     if surface_only:
-        surface_mask = extract_surface_voxels(voxel_grid, connectivity=6)
-        voxel_grid = surface_mask
-        surface_count = surface_mask.sum()
-        print(f"  Surface extraction: {surface_count} surface voxels from {total_occupied} total ({surface_count/total_occupied*100:.1f}%)")
+        # Use convex hull to get only outer boundary points
+        print(f"  Using convex hull to extract outer surface...")
+        voxel_grid = extract_surface_voxels_convex_hull(coords_normalized, block_size)
+        total_points = len(coords_normalized)
+        surface_voxels = voxel_grid.sum()
+        print(f"  Convex hull: {surface_voxels} surface voxels from {total_points} points")
+    else:
+        # Create full voxel grid
+        voxel_grid = np.zeros((block_size, block_size, block_size), dtype=bool)
+        
+        for i in range(len(coords_normalized)):
+            x, y, z = coords_normalized[i]
+            # Convert to voxel indices
+            x_idx = int(np.floor(x))
+            y_idx = int(np.floor(y))
+            z_idx = int(np.floor(z))
+            
+            # Bounds check
+            if 0 <= x_idx < block_size and 0 <= y_idx < block_size and 0 <= z_idx < block_size:
+                voxel_grid[y_idx, z_idx, x_idx] = True
     
     # Get coordinates of occupied voxels
-    occupied_positions = np.argwhere(voxel_grid)
+    occupied_positions = np.argwhere(voxel_grid)  # Shape: (N, 3) with indices (y, z, x)
     
     if len(occupied_positions) == 0:
         return np.zeros((0, 3), dtype=np.float32)
     
-    # Convert to (x, y, z) format and center at (0, 0, 0)
+    # Keep in (y, z, x) format to match Minecraft/schematic format
+    # The model was trained with (y, z, x) coordinates (matching schematic.npy format)
     offset = block_size // 2
-    voxel_coords = occupied_positions[:, [2, 0, 1]]  # Convert from (y, z, x) to (x, y, z)
-    voxel_coords = voxel_coords.astype(np.float32) - offset
+    voxel_coords = occupied_positions.astype(np.float32) - offset  # Keep (y, z, x) format
     
     return voxel_coords
 
