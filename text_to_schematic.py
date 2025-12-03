@@ -391,6 +391,7 @@ def text_to_schematic_pipeline(
     config_overrides = [
         f'model={model_name}',
         f'sampling.steps={sampling_steps}',
+        'loader.eval_batch_size=1',  # We only have one sequence to generate
     ]
     
     diffusion_model, config, tokenizer = load_diffusion_model(
@@ -419,7 +420,7 @@ def text_to_schematic_pipeline(
     with torch.no_grad():
         block_ids = diffusion_model.restore_model_and_sample(
             num_steps=sampling_steps,
-            coords=coords_tensor[0]  # Shape: (seq_len, 3)
+            coords=coords_tensor  # Shape: (batch, seq_len, 3)
         )
     
     # Extract only non-padding positions
