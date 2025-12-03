@@ -276,45 +276,37 @@ def load_diffusion_model(checkpoint_path, config_path='mdlm/configs', config_ove
     """Load the Craft3D diffusion model from checkpoint."""
     # Note: Resolvers are already registered when importing from main.py
     
-    # Hydra requires relative paths, so we need to change to the mdlm directory
+    # Get absolute path to config directory
     script_dir = Path(__file__).parent
-    mdlm_dir = script_dir / 'mdlm'
     config_dir = script_dir / config_path
     
     # Ensure config directory exists
     if not config_dir.exists():
         raise ValueError(f"Config directory does not exist: {config_dir}")
     
-    # Change to mdlm directory so 'configs' is the relative path
-    original_cwd = os.getcwd()
-    try:
-        os.chdir(mdlm_dir)
-        # Use relative path from mdlm directory (just 'configs')
-        rel_config_path = 'configs'
+    # Convert to absolute path
+    config_dir_abs = str(config_dir.resolve())
+    
+    # Load config using initialize_config_dir (accepts absolute paths)
+    with hydra.initialize_config_dir(config_dir=config_dir_abs, version_base=None):
+        overrides = [
+            'data=craft3d',
+            f'eval.checkpoint_path={checkpoint_path}',
+        ]
+        if config_overrides:
+            overrides.extend(config_overrides)
         
-        # Load config
-        with hydra.initialize(config_path=rel_config_path, version_base=None):
-            overrides = [
-                'data=craft3d',
-                f'eval.checkpoint_path={checkpoint_path}',
-            ]
-            if config_overrides:
-                overrides.extend(config_overrides)
-            
-            config = hydra.compose(config_name='config', overrides=overrides)
-    finally:
-        # Restore original working directory
-        os.chdir(original_cwd)
+        config = hydra.compose(config_name='config', overrides=overrides)
     
     # Get tokenizer
     tokenizer = dataloader.get_tokenizer(config)
     
-    # Resolve checkpoint path to absolute (before directory change)
+    # Resolve checkpoint path to absolute
     if os.path.isabs(checkpoint_path):
         checkpoint_path_abs = str(Path(checkpoint_path).resolve())
     else:
-        # Resolve relative to original working directory
-        checkpoint_path_abs = str(Path(original_cwd) / checkpoint_path)
+        # Resolve relative to script directory
+        checkpoint_path_abs = str(Path(script_dir) / checkpoint_path)
         checkpoint_path_abs = str(Path(checkpoint_path_abs).resolve())
     
     # Load model
