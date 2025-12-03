@@ -81,7 +81,7 @@ def _blocks_to_schematic(block_ids, coords, attention_mask=None, pad_token_id=0,
     
     Args:
         block_ids: Tensor of shape (seq_len,) containing block IDs
-        coords: Tensor of shape (seq_len, 3) containing (y, z, x) coordinates (centered at 0,0,0)
+        coords: Tensor of shape (seq_len, 3) containing (x, y, z) coordinates (centered at 0,0,0)
         attention_mask: Optional tensor of shape (seq_len,) to filter padding
         pad_token_id: Padding token ID to filter out
         block_size: Size of the voxel grid (default: 32)
@@ -139,25 +139,25 @@ def _blocks_to_schematic(block_ids, coords, attention_mask=None, pad_token_id=0,
     
     for i in range(len(block_ids)):
         block_id = int(block_ids[i])
-        y, z, x = coords[i]  # Coordinates are in (y, z, x) format
+        x, y, z = coords[i]  # Coordinates are in (x, y, z) format
         
         # Apply offset if needed
         if needs_shift:
+            x = x + offset
             y = y + offset
             z = z + offset
-            x = x + offset
         
         # Round to integers
+        x = int(np.round(x))
         y = int(np.round(y))
         z = int(np.round(z))
-        x = int(np.round(x))
         
         # Check bounds before clipping
+        x_valid = 0 <= x < block_size
         y_valid = 0 <= y < block_size
         z_valid = 0 <= z < block_size
-        x_valid = 0 <= x < block_size
         
-        if not (y_valid and z_valid and x_valid):
+        if not (x_valid and y_valid and z_valid):
             out_of_bounds_count += 1
             continue
         
@@ -165,13 +165,13 @@ def _blocks_to_schematic(block_ids, coords, attention_mask=None, pad_token_id=0,
         if block_id == pad_token_id or block_id == 0:
             continue
         
-        # Check for collision (overwriting existing block)
+        # Place block in schematic (format is y, z, x, channels)
+        # Schematic storage: schematic[y, z, x] where y=height, z=depth, x=width
+        # Channel 0: block ID
+        # Channel 1: metadata (set to 0 for now since we don't have that info)
         if schematic[y, z, x, 0] > 0:
             collision_count += 1
         
-        # Place block in schematic (format is y, z, x, channels)
-        # Channel 0: block ID
-        # Channel 1: metadata (set to 0 for now since we don't have that info)
         schematic[y, z, x, 0] = block_id
         schematic[y, z, x, 1] = 0
         placed_count += 1
@@ -549,7 +549,7 @@ def text_to_schematic_pipeline(
     pad_token_id = tokenizer.pad_token_id if hasattr(tokenizer, 'pad_token_id') else 0
     valid_mask = attention_mask[0].cpu().bool()
     valid_block_ids = block_ids[0][valid_mask].cpu().numpy()  # Shape: (num_coords,)
-    valid_coords = voxel_coords_yzx  # Use original (y, z, x) format for schematic output
+    valid_coords = voxel_coords_xyz  # Use (x, y, z) format - block IDs correspond to these coordinates
     
     print(f"✓ Sampled {len(valid_block_ids)} block IDs")
     
