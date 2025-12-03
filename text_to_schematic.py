@@ -69,7 +69,119 @@ _register_resolvers_safe()
 
 import dataloader
 import diffusion
-from main import _blocks_to_schematic
+
+# Copy _blocks_to_schematic function to avoid importing main.py (which has resolver registration)
+def _blocks_to_schematic(block_ids, coords, attention_mask=None, pad_token_id=0, block_size=32):
+    """Convert block IDs and coordinates to a voxel grid schematic.
+    
+    Coordinates are centered at (0,0,0) and mapped to [0, block_size) range.
+    Matches normalized schematic.npy format: (y, z, x, 2) where channel 0 is block IDs.
+    
+    Args:
+        block_ids: Tensor of shape (seq_len,) containing block IDs
+        coords: Tensor of shape (seq_len, 3) containing (x, y, z) coordinates (centered at 0,0,0)
+        attention_mask: Optional tensor of shape (seq_len,) to filter padding
+        pad_token_id: Padding token ID to filter out
+        block_size: Size of the voxel grid (default: 32)
+        
+    Returns:
+        numpy array of shape (block_size, block_size, block_size, 2) matching schematic.npy format
+        Format: (y, z, x, 2) where channel 0 is block IDs, channel 1 is metadata (set to 0)
+    """
+    # Filter out padding positions
+    if attention_mask is not None:
+        valid_mask = (attention_mask == 1)
+        block_ids = block_ids[valid_mask]
+        coords = coords[valid_mask]
+    else:
+        # Filter out padding tokens
+        valid_mask = (block_ids != pad_token_id)
+        block_ids = block_ids[valid_mask]
+        coords = coords[valid_mask]
+    
+    # Convert to numpy
+    if isinstance(block_ids, torch.Tensor):
+        block_ids = block_ids.cpu().numpy()
+    if isinstance(coords, torch.Tensor):
+        coords = coords.cpu().numpy()
+    
+    # Create empty voxel grid (y, z, x, 2) format like normalized schematic.npy
+    schematic = np.zeros((block_size, block_size, block_size, 2), dtype=np.uint8)
+    
+    # Determine if coordinates need shifting based on their range
+    # Normalized coordinates from dataset are in [0, block_size) range
+    # But if they're centered at (0,0,0), they would be in [-block_size/2, block_size/2] range
+    needs_shift = False
+    if len(coords) > 0:
+        min_coord = float(coords.min())
+        max_coord = float(coords.max())
+        # If we see negative coordinates, they're centered at 0 and need shifting
+        if min_coord < 0:
+            needs_shift = True
+            offset = block_size // 2
+        # If coordinates are in [0, block_size) range, use directly
+        elif min_coord >= 0 and max_coord < block_size:
+            needs_shift = False
+            offset = 0
+        else:
+            # Default: assume coordinates need to be centered
+            needs_shift = True
+            offset = block_size // 2
+    else:
+        offset = 0
+    
+    # Place blocks in the grid
+    placed_count = 0
+    collision_count = 0
+    out_of_bounds_count = 0
+    
+    for i in range(len(block_ids)):
+        block_id = int(block_ids[i])
+        x, y, z = coords[i]
+        
+        # Apply offset if needed
+        if needs_shift:
+            x = x + offset
+            y = y + offset
+            z = z + offset
+        
+        # Round to integers
+        x = int(np.round(x))
+        y = int(np.round(y))
+        z = int(np.round(z))
+        
+        # Check bounds before clipping
+        x_valid = 0 <= x < block_size
+        y_valid = 0 <= y < block_size
+        z_valid = 0 <= z < block_size
+        
+        if not (x_valid and y_valid and z_valid):
+            out_of_bounds_count += 1
+            continue
+        
+        # Skip if block_id is padding (0)
+        if block_id == pad_token_id or block_id == 0:
+            continue
+        
+        # Check for collision (overwriting existing block)
+        if schematic[y, z, x, 0] > 0:
+            collision_count += 1
+        
+        # Place block in schematic (format is y, z, x, channels)
+        # Channel 0: block ID
+        # Channel 1: metadata (set to 0 for now since we don't have that info)
+        schematic[y, z, x, 0] = block_id
+        schematic[y, z, x, 1] = 0
+        placed_count += 1
+    
+    # Debug: print statistics if there are issues
+    if len(block_ids) > 0:
+        if out_of_bounds_count > 0 or collision_count > 0 or placed_count < len(block_ids) * 0.9:
+            print(f'[Schematic conversion] Placed {placed_count}/{len(block_ids)} blocks, '
+                  f'{out_of_bounds_count} out-of-bounds, {collision_count} collisions, '
+                  f'coords range: [{min_coord:.1f}, {max_coord:.1f}], needs_shift: {needs_shift}')
+    
+    return schematic
 
 
 def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None):
