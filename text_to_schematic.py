@@ -184,7 +184,65 @@ def _blocks_to_schematic(block_ids, coords, attention_mask=None, pad_token_id=0,
     return schematic
 
 
-def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None):
+def extract_surface_voxels(voxel_grid, connectivity=6):
+    """Extract only surface/outer voxels from a voxel grid.
+    
+    A surface voxel is one that has at least one empty neighbor.
+    
+    Args:
+        voxel_grid: Boolean numpy array of shape (block_size, block_size, block_size)
+                   True indicates occupied voxel
+        connectivity: Number of neighbors to check (6 or 26, default: 6)
+                    6 = face-adjacent only, 26 = all adjacent (slower but more accurate)
+    
+    Returns:
+        Boolean numpy array of same shape, True only for surface voxels
+    """
+    block_size = voxel_grid.shape[0]
+    surface_mask = np.zeros_like(voxel_grid, dtype=bool)
+    
+    # 6-connected neighbors (face-adjacent only)
+    neighbors_6 = [
+        (-1, 0, 0), (1, 0, 0),
+        (0, -1, 0), (0, 1, 0),
+        (0, 0, -1), (0, 0, 1),
+    ]
+    
+    if connectivity == 6:
+        neighbors = neighbors_6
+    else:  # 26-connected
+        neighbors = []
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                for dz in [-1, 0, 1]:
+                    if (dx, dy, dz) != (0, 0, 0):
+                        neighbors.append((dx, dy, dz))
+    
+    # Check each occupied voxel
+    occupied_positions = np.argwhere(voxel_grid)
+    
+    for y, z, x in occupied_positions:
+        is_surface = False
+        
+        # Check all neighbors
+        for dy, dz, dx in neighbors:
+            ny, nz, nx = y + dy, z + dz, x + dx
+            
+            # If neighbor is out of bounds or empty, this is a surface voxel
+            if (ny < 0 or ny >= block_size or
+                nz < 0 or nz >= block_size or
+                nx < 0 or nx >= block_size or
+                not voxel_grid[ny, nz, nx]):
+                is_surface = True
+                break
+        
+        if is_surface:
+            surface_mask[y, z, x] = True
+    
+    return surface_mask
+
+
+def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface_only=False):
     """Convert point cloud to occupied voxel coordinates using majority vote.
     
     Args:
@@ -192,6 +250,7 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None):
         block_size: Size of voxel grid (default: 32)
         bounds: Optional bounds tuple ((min_x, min_y, min_z), (max_x, max_y, max_z))
                 If None, auto-calculates from point cloud
+        surface_only: If True, only return surface/outer voxels, removing interior voxels (default: False)
     
     Returns:
         numpy array of shape (N, 3) with (x, y, z) coordinates centered at (0, 0, 0)
@@ -217,8 +276,9 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None):
     coords_normalized = (coords - min_coords) / coord_range * block_size
     coords_normalized = np.clip(coords_normalized, 0, block_size - 1)
     
-    # Use set to get unique voxel coordinates (majority vote handled by uniqueness)
-    voxel_coords_set = set()
+    # Create voxel grid
+    voxel_grid = np.zeros((block_size, block_size, block_size), dtype=bool)
+    
     for i in range(len(coords_normalized)):
         x, y, z = coords_normalized[i]
         # Convert to voxel indices
@@ -228,17 +288,26 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None):
         
         # Bounds check
         if 0 <= x_idx < block_size and 0 <= y_idx < block_size and 0 <= z_idx < block_size:
-            voxel_coords_set.add((x_idx, y_idx, z_idx))
+            voxel_grid[y_idx, z_idx, x_idx] = True
     
-    # Convert to numpy array and center at (0, 0, 0)
+    # Extract surface voxels if requested
+    total_occupied = voxel_grid.sum()
+    if surface_only:
+        surface_mask = extract_surface_voxels(voxel_grid, connectivity=6)
+        voxel_grid = surface_mask
+        surface_count = surface_mask.sum()
+        print(f"  Surface extraction: {surface_count} surface voxels from {total_occupied} total ({surface_count/total_occupied*100:.1f}%)")
+    
+    # Get coordinates of occupied voxels
+    occupied_positions = np.argwhere(voxel_grid)
+    
+    if len(occupied_positions) == 0:
+        return np.zeros((0, 3), dtype=np.float32)
+    
+    # Convert to (x, y, z) format and center at (0, 0, 0)
     offset = block_size // 2
-    voxel_coords = np.array(list(voxel_coords_set), dtype=np.float32)
-    
-    if len(voxel_coords) > 0:
-        # Center coordinates
-        voxel_coords = voxel_coords - offset
-    else:
-        voxel_coords = np.zeros((0, 3), dtype=np.float32)
+    voxel_coords = occupied_positions[:, [2, 0, 1]]  # Convert from (y, z, x) to (x, y, z)
+    voxel_coords = voxel_coords.astype(np.float32) - offset
     
     return voxel_coords
 
@@ -329,6 +398,7 @@ def text_to_schematic_pipeline(
     device=None,
     config_path='mdlm/configs',
     point_e_base='base40M-textvec',
+    surface_only=False,
 ):
     """All-in-one pipeline: Text → Point Cloud → Voxel Grid → Block IDs → Schematic.
     
@@ -342,6 +412,7 @@ def text_to_schematic_pipeline(
         device: Device to run on (default: auto-detect)
         config_path: Path to configs directory (default: 'mdlm/configs')
         point_e_base: Point-e base model name (default: 'base40M-textvec')
+        surface_only: If True, only keep surface/outer voxels, removing interior (default: False)
     
     Returns:
         numpy array of shape (block_size, block_size, block_size, 2) - the final schematic
@@ -374,7 +445,11 @@ def text_to_schematic_pipeline(
     
     # Step 3: Convert to voxel coordinates
     print(f"\nStep 3/5: Converting point cloud to {block_size}x{block_size}x{block_size} voxel grid...")
-    voxel_coords = point_cloud_to_voxel_coords(point_cloud, block_size=block_size)
+    voxel_coords = point_cloud_to_voxel_coords(
+        point_cloud, 
+        block_size=block_size,
+        surface_only=surface_only
+    )
     print(f"✓ Extracted {len(voxel_coords)} occupied voxels")
     
     if len(voxel_coords) == 0:
@@ -405,6 +480,13 @@ def text_to_schematic_pipeline(
     # Prepare coordinates for diffusion model
     seq_len = config.model.length
     num_coords = len(voxel_coords)
+    
+    # Truncate coordinates if we have more than the model can handle
+    if num_coords > seq_len:
+        print(f"  Warning: {num_coords} occupied voxels exceeds model sequence length ({seq_len})")
+        print(f"  Truncating to first {seq_len} voxels")
+        voxel_coords = voxel_coords[:seq_len]
+        num_coords = seq_len
     
     # Pad coordinates to seq_len
     coords_tensor = torch.zeros((1, seq_len, 3), dtype=torch.float32, device=device)
@@ -523,6 +605,11 @@ def main():
         choices=['base40M-textvec', 'base300M-textvec', 'base1B-textvec'],
         help='Point-e base model name (default: base40M-textvec)'
     )
+    parser.add_argument(
+        '--surface_only',
+        action='store_true',
+        help='Only keep surface/outer voxels, removing interior voxels (default: False)'
+    )
     
     args = parser.parse_args()
     
@@ -546,6 +633,7 @@ def main():
             device=device,
             config_path=args.config_path,
             point_e_base=args.point_e_base,
+            surface_only=args.surface_only,
         )
         print(f"\nSuccess! Schematic saved to {args.output}")
     except Exception as e:
