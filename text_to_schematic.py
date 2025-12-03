@@ -335,7 +335,8 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface
         return np.zeros((0, 3), dtype=np.float32)
     
     # Keep in (y, z, x) format to match Minecraft/schematic format
-    # The model was trained with (y, z, x) coordinates (matching schematic.npy format)
+    # Note: These will be converted to (x, y, z) before passing to the model,
+    # then converted back to (y, z, x) for the final schematic output
     offset = block_size // 2
     voxel_coords = occupied_positions.astype(np.float32) - offset  # Keep (y, z, x) format
     
@@ -518,28 +519,37 @@ def text_to_schematic_pipeline(
         voxel_coords = voxel_coords[:seq_len]
         num_coords = seq_len
     
+    # Convert coordinates from (y, z, x) to (x, y, z) for the model
+    # voxel_coords is in (y, z, x) format, but model expects (x, y, z)
+    voxel_coords_yzx = voxel_coords.copy()  # Keep original (y, z, x) for final schematic
+    voxel_coords_xyz = np.zeros_like(voxel_coords_yzx)
+    voxel_coords_xyz[:, 0] = voxel_coords_yzx[:, 2]  # x = z (from y,z,x)
+    voxel_coords_xyz[:, 1] = voxel_coords_yzx[:, 0]  # y = y (from y,z,x)
+    voxel_coords_xyz[:, 2] = voxel_coords_yzx[:, 1]  # z = z (from y,z,x)
+    
     # Pad coordinates to seq_len
     coords_tensor = torch.zeros((1, seq_len, 3), dtype=torch.float32, device=device)
-    coords_tensor[0, :num_coords] = torch.from_numpy(voxel_coords).to(device)
+    coords_tensor[0, :num_coords] = torch.from_numpy(voxel_coords_xyz).to(device)
     
     # Create attention mask
     attention_mask = torch.zeros((1, seq_len), dtype=torch.long, device=device)
     attention_mask[0, :num_coords] = 1
     
     print(f"  Prepared coordinates: {num_coords} occupied voxels (seq_len={seq_len})")
+    print(f"  Converted from (y,z,x) to (x,y,z) format for model input")
     
     # Sample block IDs
     with torch.no_grad():
         block_ids = diffusion_model.restore_model_and_sample(
             num_steps=sampling_steps,
-            coords=coords_tensor  # Shape: (batch, seq_len, 3)
+            coords=coords_tensor  # Shape: (batch, seq_len, 3) in (x, y, z) format
         )
     
     # Extract only non-padding positions
     pad_token_id = tokenizer.pad_token_id if hasattr(tokenizer, 'pad_token_id') else 0
     valid_mask = attention_mask[0].cpu().bool()
     valid_block_ids = block_ids[0][valid_mask].cpu().numpy()  # Shape: (num_coords,)
-    valid_coords = voxel_coords  # Already filtered
+    valid_coords = voxel_coords_yzx  # Use original (y, z, x) format for schematic output
     
     print(f"✓ Sampled {len(valid_block_ids)} block IDs")
     
