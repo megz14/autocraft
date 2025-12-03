@@ -11,10 +11,16 @@ This script:
 Usage:
     python text_to_schematic.py \
         --text "a red motorcycle" \
-        --checkpoint_path /path/to/checkpoint.ckpt \
+        --checkpoint_path /workspace/autocraft/autocraft/mdlm/outputs/craft3d_train/2025.12.03/000628/checkpoints/best.ckpt \
         --output schematic.npy \
         --model small \
         --steps 128
+    
+    Or with relative path:
+    python text_to_schematic.py \
+        --text "a red motorcycle" \
+        --checkpoint_path mdlm/outputs/craft3d_train/2025.12.03/000628/checkpoints/best.ckpt \
+        --output schematic.npy
 """
 
 import os
@@ -43,6 +49,24 @@ from point_e.models.configs import MODEL_CONFIGS, model_from_config
 import hydra
 import omegaconf
 from omegaconf import DictConfig, OmegaConf
+
+# Register resolvers before importing mdlm modules (they might already register them)
+def _register_resolvers_safe():
+    """Register OmegaConf resolvers, skipping if already registered."""
+    resolvers = {
+        'cwd': os.getcwd,
+        'device_count': torch.cuda.device_count,
+        'eval': eval,
+        'div_up': lambda x, y: (x + y - 1) // y,
+    }
+    for name, func in resolvers.items():
+        try:
+            omegaconf.OmegaConf.register_new_resolver(name, func)
+        except ValueError:
+            pass  # Already registered
+
+_register_resolvers_safe()
+
 import dataloader
 import diffusion
 from main import _blocks_to_schematic
@@ -138,11 +162,7 @@ def initialize_point_e_sampler(device, base_name='base40M-textvec'):
 
 def load_diffusion_model(checkpoint_path, config_path='mdlm/configs', config_overrides=None):
     """Load the Craft3D diffusion model from checkpoint."""
-    # Register resolvers (same as in mdlm/main.py)
-    omegaconf.OmegaConf.register_new_resolver('cwd', os.getcwd)
-    omegaconf.OmegaConf.register_new_resolver('device_count', torch.cuda.device_count)
-    omegaconf.OmegaConf.register_new_resolver('eval', eval)
-    omegaconf.OmegaConf.register_new_resolver('div_up', lambda x, y: (x + y - 1) // y)
+    # Note: Resolvers are already registered when importing from main.py
     
     # Resolve config path relative to script directory
     if not os.path.isabs(config_path):
@@ -162,9 +182,12 @@ def load_diffusion_model(checkpoint_path, config_path='mdlm/configs', config_ove
     # Get tokenizer
     tokenizer = dataloader.get_tokenizer(config)
     
+    # Resolve checkpoint path to absolute
+    checkpoint_path_abs = str(Path(checkpoint_path).resolve())
+    
     # Load model
     model = diffusion.Diffusion.load_from_checkpoint(
-        checkpoint_path,
+        checkpoint_path_abs,
         tokenizer=tokenizer,
         config=config
     )
@@ -235,7 +258,9 @@ def text_to_schematic_pipeline(
     
     # Step 4: Load diffusion model and sample block IDs
     print(f"\nStep 4/5: Loading diffusion model and sampling block IDs...")
-    print(f"  Checkpoint: {checkpoint_path}")
+    # Resolve checkpoint path to absolute for display
+    checkpoint_path_abs = str(Path(checkpoint_path).resolve())
+    print(f"  Checkpoint: {checkpoint_path_abs}")
     print(f"  Model: {model_name}")
     print(f"  Sampling steps: {sampling_steps}")
     
@@ -245,7 +270,7 @@ def text_to_schematic_pipeline(
     ]
     
     diffusion_model, config, tokenizer = load_diffusion_model(
-        checkpoint_path,
+        checkpoint_path_abs,
         config_path=config_path,
         config_overrides=config_overrides
     )
