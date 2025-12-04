@@ -270,7 +270,7 @@ def extract_surface_voxels_convex_hull(coords, block_size):
         return voxel_grid
 
 
-def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface_only=False, no_downsample=False):
+def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface_only=False):
     """Convert point cloud to occupied voxel coordinates using majority vote.
     
     Args:
@@ -279,7 +279,6 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface
         bounds: Optional bounds tuple ((min_x, min_y, min_z), (max_x, max_y, max_z))
                 If None, auto-calculates from point cloud
         surface_only: If True, only return surface/outer voxels, removing interior voxels (default: False)
-        no_downsample: If True, skip voxelization and return raw point coordinates (default: False)
     
     Returns:
         numpy array of shape (N, 3) with (y, z, x) coordinates centered at (0, 0, 0)
@@ -292,20 +291,6 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface
         coords = point_cloud
     else:
         raise ValueError(f"Unsupported point cloud format: {type(point_cloud)}")
-    
-    # If no_downsample, return raw coordinates (just convert to y,z,x format and center)
-    if no_downsample:
-        # Convert from (x, y, z) to (y, z, x) format
-        coords_yzx = np.zeros_like(coords)
-        coords_yzx[:, 0] = coords[:, 1]  # y = y
-        coords_yzx[:, 1] = coords[:, 2]  # z = z
-        coords_yzx[:, 2] = coords[:, 0]  # x = x
-        
-        # Center at (0, 0, 0)
-        center = coords_yzx.mean(axis=0)
-        coords_yzx = coords_yzx - center
-        
-        return coords_yzx.astype(np.float32)
     
     # Normalize coordinates to [0, block_size) range
     if bounds is None:
@@ -358,73 +343,30 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface
     return voxel_coords
 
 
-def initialize_point_e_sampler(device, base_name='base40M-textvec', num_points=None):
-    """Initialize point-e sampler for text-to-point-cloud generation.
-    
-    Args:
-        device: Device to run on
-        base_name: Point-e base model name
-        num_points: Number of points to generate. If None, uses default [1024, 4096-1024].
-                    If int, generates that many points (single stage).
-                    If list, uses two-stage generation with those point counts.
-    """
+def initialize_point_e_sampler(device, base_name='base40M-textvec'):
+    """Initialize point-e sampler for text-to-point-cloud generation."""
     print(f'Creating point-e base model ({base_name})...')
     base_model = model_from_config(MODEL_CONFIGS[base_name], device)
     base_model.eval()
     base_diffusion = diffusion_from_config(DIFFUSION_CONFIGS[base_name])
     
-    if num_points is None:
-        # Default: two-stage generation (1024 base + 3072 upsample = 4096 total)
-        num_points = [1024, 4096 - 1024]
-        use_upsampler = True
-    elif isinstance(num_points, int):
-        # Single stage: just generate num_points directly
-        num_points = [num_points]
-        use_upsampler = False
-    elif isinstance(num_points, list):
-        # Custom two-stage: use provided point counts
-        use_upsampler = len(num_points) > 1
-    else:
-        raise ValueError(f"num_points must be int, list, or None, got {type(num_points)}")
+    print('Creating point-e upsample model...')
+    upsampler_model = model_from_config(MODEL_CONFIGS['upsample'], device)
+    upsampler_model.eval()
+    upsampler_diffusion = diffusion_from_config(DIFFUSION_CONFIGS['upsample'])
     
-    if use_upsampler:
-        print('Creating point-e upsample model...')
-        upsampler_model = model_from_config(MODEL_CONFIGS['upsample'], device)
-        upsampler_model.eval()
-        upsampler_diffusion = diffusion_from_config(DIFFUSION_CONFIGS['upsample'])
-        
-        print('Downloading point-e checkpoints...')
-        base_model.load_state_dict(load_checkpoint(base_name, device))
-        upsampler_model.load_state_dict(load_checkpoint('upsample', device))
-        
-        models = [base_model, upsampler_model]
-        diffusions = [base_diffusion, upsampler_diffusion]
-        guidance_scale = [3.0, 0.0]
-        model_kwargs_key_filter = ('texts', '')  # Do not condition the upsampler at all
-    else:
-        print('Downloading point-e checkpoints...')
-        base_model.load_state_dict(load_checkpoint(base_name, device))
-        
-        models = [base_model]
-        diffusions = [base_diffusion]
-        guidance_scale = [3.0]
-        model_kwargs_key_filter = ('texts',)  # Single element tuple for single model
+    print('Downloading point-e checkpoints...')
+    base_model.load_state_dict(load_checkpoint(base_name, device))
+    upsampler_model.load_state_dict(load_checkpoint('upsample', device))
     
-    # Create sampler - explicitly set all sequence parameters to match number of models
-    n_models = len(models)
     sampler = PointCloudSampler(
         device=device,
-        models=models,
-        diffusions=diffusions,
-        num_points=num_points,
+        models=[base_model, upsampler_model],
+        diffusions=[base_diffusion, upsampler_diffusion],
+        num_points=[1024, 4096 - 1024],
         aux_channels=['R', 'G', 'B'],
-        guidance_scale=guidance_scale,
-        model_kwargs_key_filter=model_kwargs_key_filter,
-        use_karras=[True] * n_models,
-        karras_steps=[64] * n_models,
-        sigma_min=[1e-3] * n_models,
-        sigma_max=[120, 160][:n_models] if n_models > 1 else [120],
-        s_churn=[3, 0][:n_models] if n_models > 1 else [3],
+        guidance_scale=[3.0, 0.0],
+        model_kwargs_key_filter=('texts', ''),  # Do not condition the upsampler at all
     )
     
     return sampler
@@ -488,8 +430,6 @@ def text_to_schematic_pipeline(
     config_path='mdlm/configs',
     point_e_base='base40M-textvec',
     surface_only=False,
-    num_points=None,
-    no_downsample=False,
 ):
     """All-in-one pipeline: Text → Point Cloud → Voxel Grid → Block IDs → Schematic.
     
@@ -504,9 +444,6 @@ def text_to_schematic_pipeline(
         config_path: Path to configs directory (default: 'mdlm/configs')
         point_e_base: Point-e base model name (default: 'base40M-textvec')
         surface_only: If True, only keep surface/outer voxels, removing interior (default: False)
-        num_points: Number of points for point-e to generate. None=default [1024, 4096-1024],
-                    int=single stage with that many points, list=[base_points, upsample_points]
-        no_downsample: If True, skip voxelization and use raw point coordinates (default: False)
     
     Returns:
         numpy array of shape (block_size, block_size, block_size, 2) - the final schematic
@@ -520,7 +457,7 @@ def text_to_schematic_pipeline(
     
     # Step 1: Initialize point-e sampler
     print(f"\nStep 1/5: Initializing point-e models...")
-    point_e_sampler = initialize_point_e_sampler(device, base_name=point_e_base, num_points=num_points)
+    point_e_sampler = initialize_point_e_sampler(device, base_name=point_e_base)
     
     # Step 2: Generate point cloud from text
     print(f"\nStep 2/5: Generating point cloud from text: '{text_prompt}'")
@@ -538,15 +475,11 @@ def text_to_schematic_pipeline(
     print(f"✓ Generated point cloud with {len(point_cloud.coords)} points")
     
     # Step 3: Convert to voxel coordinates
-    if no_downsample:
-        print(f"\nStep 3/5: Using raw point cloud coordinates (no downsampling)...")
-    else:
-        print(f"\nStep 3/5: Converting point cloud to {block_size}x{block_size}x{block_size} voxel grid...")
+    print(f"\nStep 3/5: Converting point cloud to {block_size}x{block_size}x{block_size} voxel grid...")
     voxel_coords = point_cloud_to_voxel_coords(
         point_cloud, 
         block_size=block_size,
-        surface_only=surface_only,
-        no_downsample=no_downsample
+        surface_only=surface_only
     )
     print(f"✓ Extracted {len(voxel_coords)} occupied voxels")
     
@@ -719,17 +652,6 @@ def main():
         action='store_true',
         help='Only keep surface/outer voxels, removing interior voxels (default: False)'
     )
-    parser.add_argument(
-        '--num_points',
-        type=int,
-        default=None,
-        help='Number of points for point-e to generate. If None, uses default two-stage (1024 base + 3072 upsample = 4096 total). If specified, uses single-stage generation with that many points.'
-    )
-    parser.add_argument(
-        '--no_downsample',
-        action='store_true',
-        help='Skip voxelization and use raw point cloud coordinates (default: False). Note: This may result in more points than model can handle.'
-    )
     
     args = parser.parse_args()
     
@@ -754,8 +676,6 @@ def main():
             config_path=args.config_path,
             point_e_base=args.point_e_base,
             surface_only=args.surface_only,
-            num_points=args.num_points,
-            no_downsample=args.no_downsample,
         )
         print(f"\nSuccess! Schematic saved to {args.output}")
     except Exception as e:
