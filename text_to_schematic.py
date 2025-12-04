@@ -111,24 +111,25 @@ def _blocks_to_schematic(block_ids, coords, attention_mask=None, pad_token_id=0,
     schematic = np.zeros((block_size, block_size, block_size, 2), dtype=np.uint8)
     
     # Determine if coordinates need shifting based on their range
-    # Normalized coordinates from dataset are in [0, block_size) range
-    # But if they're centered at (0,0,0), they would be in [-block_size/2, block_size/2] range
+    # Dataset normalization keeps coordinates in [0, block_size) range (positive)
+    # So coordinates should already be in the correct range
     needs_shift = False
     if len(coords) > 0:
         min_coord = float(coords.min())
         max_coord = float(coords.max())
-        # If we see negative coordinates, they're centered at 0 and need shifting
-        if min_coord < 0:
-            needs_shift = True
-            offset = block_size // 2
-        # If coordinates are in [0, block_size) range, use directly
-        elif min_coord >= 0 and max_coord < block_size:
+        # If coordinates are in [0, block_size) range, use directly (matches dataset format)
+        if min_coord >= 0 and max_coord < block_size:
             needs_shift = False
             offset = 0
-        else:
-            # Default: assume coordinates need to be centered
+        # If we see negative coordinates, they're centered at 0 and need shifting to [0, block_size)
+        elif min_coord < 0:
             needs_shift = True
             offset = block_size // 2
+        else:
+            # Coordinates are positive but might be out of range - clip to [0, block_size)
+            needs_shift = False
+            offset = 0
+            # Will be clipped in bounds check below
     else:
         offset = 0
     
@@ -294,16 +295,24 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface
     
     # Normalize coordinates to [0, block_size) range
     if bounds is None:
-        min_coords = coords.min(axis=0)
-        max_coords = coords.max(axis=0)
+        min_coords = coords.min(axis=0)  # Minimum for each axis (x, y, z)
+        max_coords = coords.max(axis=0)  # Maximum for each axis (x, y, z)
     else:
         min_coords, max_coords = bounds
     
-    # Center and scale to [0, block_size)
+    # Shift coordinates to be positive by subtracting minimum value from each axis
+    # This ensures all coordinates become positive (matching dataset format)
+    # coords_shifted will have all values >= 0
+    coords_shifted = coords - min_coords
+    
+    # Scale to fit within block_size
     coord_range = max_coords - min_coords
     coord_range = np.where(coord_range < 1e-8, 1.0, coord_range)  # Avoid division by zero
-    coords_normalized = (coords - min_coords) / coord_range * block_size
+    coords_normalized = coords_shifted / coord_range * block_size
     coords_normalized = np.clip(coords_normalized, 0, block_size - 1)
+    
+    # Verify all coordinates are now positive (should be [0, block_size))
+    assert np.all(coords_normalized >= 0), f"Some coordinates are still negative after shifting! Min: {coords_normalized.min()}"
     
     # Extract surface using convex hull if requested (before voxelization)
     if surface_only:
@@ -335,10 +344,10 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface
         return np.zeros((0, 3), dtype=np.float32)
     
     # Keep in (y, z, x) format to match Minecraft/schematic format
-    # Note: These will be converted to (x, y, z) before passing to the model,
-    # then converted back to (y, z, x) for the final schematic output
-    offset = block_size // 2
-    voxel_coords = occupied_positions.astype(np.float32) - offset  # Keep (y, z, x) format
+    # Note: Dataset normalization keeps coordinates in [0, block_size) range (not centered at 0)
+    # So we keep coordinates in [0, block_size) range to match training data format
+    # These will be converted to (x, y, z) before passing to the model
+    voxel_coords = occupied_positions.astype(np.float32)  # Keep (y, z, x) format, in [0, block_size) range
     
     return voxel_coords
 
