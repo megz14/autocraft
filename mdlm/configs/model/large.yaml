@@ -1,0 +1,11 @@
+name: large
+type: ddit
+hidden_size: 1536  # 12x larger than small (128), 1.5x larger than medium (1024)
+cond_dim: 256  # Increased proportionally
+length: 4096  # Longer sequences if your data supports it
+n_blocks: 32  # Deeper model (was 24)
+n_heads: 24  # Must divide hidden_size (1536 / 24 = 64)
+scale_by_sigma: True
+dropout: 0.1
+tie_word_embeddings: False
+

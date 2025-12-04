@@ -2,10 +2,20 @@
 """Convert block IDs in 3dcraft_normalized dataset and print block distribution.
 
 This script:
-1. Loads the old_id_to_new_id.json mapping
-2. Converts all block IDs in schematic.npy files from old IDs to new IDs
+1. Loads an ID mapping file (default: old_id_to_compact_id.json for compact IDs)
+2. Converts all block IDs in schematic.npy files from old IDs to new/compact IDs
 3. Optionally saves converted schematics (with --save flag)
 4. Prints block distribution statistics
+
+Usage:
+    # Convert to compact IDs (default)
+    python convert_block_ids.py --save
+    
+    # Convert to new IDs (original old IDs)
+    python convert_block_ids.py --mapping_file configs/minecraft/old_id_to_new_id.json --save
+    
+    # Convert in-place (overwrites original files)
+    python convert_block_ids.py --mapping_file configs/minecraft/old_id_to_compact_id.json --in_place
 """
 
 import argparse
@@ -18,10 +28,22 @@ from tqdm import tqdm
 
 
 def load_id_mapping(mapping_path):
-    """Load the old_id_to_new_id mapping."""
+    """Load the ID mapping from JSON file.
+    
+    Handles both JSON files with string keys and files with unquoted integer keys.
+    """
     with open(mapping_path, 'r') as f:
-        mapping = ast.literal_eval(f.read())
-    return mapping
+        content = f.read()
+    
+    # Try JSON first (for files with string keys like old_id_to_compact_id.json)
+    try:
+        mapping = json.loads(content)
+        # Convert string keys to integers
+        return {int(k): v for k, v in mapping.items()}
+    except (json.JSONDecodeError, ValueError):
+        # Fall back to ast.literal_eval (for files with unquoted integer keys)
+        mapping = ast.literal_eval(content)
+        return mapping
 
 
 def convert_schematic(schematic_path, id_mapping, save=False, output_dir=None, in_place=False):
@@ -122,8 +144,8 @@ def main():
     parser.add_argument(
         "--mapping_file",
         type=str,
-        default="configs/minecraft/old_id_to_new_id.json",
-        help="Path to old_id_to_new_id.json mapping file"
+        default="configs/minecraft/old_id_to_compact_id.json",
+        help="Path to ID mapping file (default: old_id_to_compact_id.json for compact IDs, or old_id_to_new_id.json for new IDs)"
     )
     parser.add_argument(
         "--save",
