@@ -570,7 +570,9 @@ def text_to_schematic_pipeline(
     pad_token_id = tokenizer.pad_token_id if hasattr(tokenizer, 'pad_token_id') else 0
     valid_mask = attention_mask[0].cpu().bool()
     valid_block_ids = block_ids[0][valid_mask].cpu().numpy()  # Shape: (num_coords,)
-    valid_coords = voxel_coords_xyz[valid_mask]  # Use (x, y, z) format - only non-padding coordinates
+    # voxel_coords_xyz already contains only valid coordinates (no padding), so use it directly
+    # It has shape (num_coords, 3) which matches valid_block_ids shape (num_coords,)
+    valid_coords = voxel_coords_xyz  # Use (x, y, z) format - already contains only valid coordinates
     
     # Ensure coordinates are in [0, block_size) range (they should already be, but verify)
     print(f"  Coordinate range after sampling: X=[{valid_coords[:, 0].min():.1f}, {valid_coords[:, 0].max():.1f}], "
