@@ -349,6 +349,11 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface
     # These will be converted to (x, y, z) before passing to the model
     voxel_coords = occupied_positions.astype(np.float32)  # Keep (y, z, x) format, in [0, block_size) range
     
+    # Verify coordinates are in [0, block_size) range (they should be since occupied_positions are indices)
+    if len(voxel_coords) > 0:
+        assert np.all(voxel_coords >= 0) and np.all(voxel_coords < block_size), \
+            f"Coordinates should be in [0, {block_size}) range, but got range [{voxel_coords.min():.1f}, {voxel_coords.max():.1f}]"
+    
     return voxel_coords
 
 
@@ -529,14 +534,19 @@ def text_to_schematic_pipeline(
         num_coords = seq_len
     
     # Convert coordinates from (y, z, x) to (x, y, z) for the model
-    # voxel_coords is in (y, z, x) format, but model expects (x, y, z)
+    # voxel_coords is in (y, z, x) format in [0, block_size) range, but model expects (x, y, z)
     # Format conversion: (y, z, x) -> (x, y, z)
     # Index mapping: [0=y, 1=z, 2=x] -> [0=x, 1=y, 2=z]
     voxel_coords_yzx = voxel_coords.copy()  # Keep original (y, z, x) for final schematic
     voxel_coords_xyz = np.zeros_like(voxel_coords_yzx)
     voxel_coords_xyz[:, 0] = voxel_coords_yzx[:, 2]  # x = x (from y,z,x index 2)
     voxel_coords_xyz[:, 1] = voxel_coords_yzx[:, 0]  # y = y (from y,z,x index 0)
-    voxel_coords_xyz[:, 2] = -voxel_coords_yzx[:, 1]  # z = -z (flip Z axis to fix orientation)
+    voxel_coords_xyz[:, 2] = voxel_coords_yzx[:, 1]  # z = z (keep positive, no flipping)
+    
+    # Ensure all coordinates are in [0, block_size) range (should already be, but verify)
+    print(f"  Coordinate range before model: X=[{voxel_coords_xyz[:, 0].min():.1f}, {voxel_coords_xyz[:, 0].max():.1f}], "
+          f"Y=[{voxel_coords_xyz[:, 1].min():.1f}, {voxel_coords_xyz[:, 1].max():.1f}], "
+          f"Z=[{voxel_coords_xyz[:, 2].min():.1f}, {voxel_coords_xyz[:, 2].max():.1f}]")
     
     # Pad coordinates to seq_len
     coords_tensor = torch.zeros((1, seq_len, 3), dtype=torch.float32, device=device)
@@ -560,7 +570,21 @@ def text_to_schematic_pipeline(
     pad_token_id = tokenizer.pad_token_id if hasattr(tokenizer, 'pad_token_id') else 0
     valid_mask = attention_mask[0].cpu().bool()
     valid_block_ids = block_ids[0][valid_mask].cpu().numpy()  # Shape: (num_coords,)
-    valid_coords = voxel_coords_xyz  # Use (x, y, z) format - block IDs correspond to these coordinates
+    valid_coords = voxel_coords_xyz[valid_mask]  # Use (x, y, z) format - only non-padding coordinates
+    
+    # Ensure coordinates are in [0, block_size) range (they should already be, but verify)
+    print(f"  Coordinate range after sampling: X=[{valid_coords[:, 0].min():.1f}, {valid_coords[:, 0].max():.1f}], "
+          f"Y=[{valid_coords[:, 1].min():.1f}, {valid_coords[:, 1].max():.1f}], "
+          f"Z=[{valid_coords[:, 2].min():.1f}, {valid_coords[:, 2].max():.1f}]")
+    
+    # If coordinates are negative, shift them to be positive
+    if valid_coords.min() < 0:
+        print(f"  Warning: Some coordinates are negative! Shifting to positive range...")
+        min_coords = valid_coords.min(axis=0)
+        valid_coords = valid_coords - min_coords  # Shift to make all coordinates >= 0
+        print(f"  After shifting: X=[{valid_coords[:, 0].min():.1f}, {valid_coords[:, 0].max():.1f}], "
+              f"Y=[{valid_coords[:, 1].min():.1f}, {valid_coords[:, 1].max():.1f}], "
+              f"Z=[{valid_coords[:, 2].min():.1f}, {valid_coords[:, 2].max():.1f}]")
     
     print(f"✓ Sampled {len(valid_block_ids)} block IDs")
     
