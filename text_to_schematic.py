@@ -399,21 +399,32 @@ def initialize_point_e_sampler(device, base_name='base40M-textvec', num_points=N
         
         models = [base_model, upsampler_model]
         diffusions = [base_diffusion, upsampler_diffusion]
+        guidance_scale = [3.0, 0.0]
+        model_kwargs_key_filter = ('texts', '')  # Do not condition the upsampler at all
     else:
         print('Downloading point-e checkpoints...')
         base_model.load_state_dict(load_checkpoint(base_name, device))
         
         models = [base_model]
         diffusions = [base_diffusion]
+        guidance_scale = [3.0]
+        model_kwargs_key_filter = ('texts',)  # Single element tuple for single model
     
+    # Create sampler - explicitly set all sequence parameters to match number of models
+    n_models = len(models)
     sampler = PointCloudSampler(
         device=device,
         models=models,
         diffusions=diffusions,
         num_points=num_points,
         aux_channels=['R', 'G', 'B'],
-        guidance_scale=[3.0, 0.0] if use_upsampler else [3.0],
-        model_kwargs_key_filter=('texts', ''),  # Do not condition the upsampler at all
+        guidance_scale=guidance_scale,
+        model_kwargs_key_filter=model_kwargs_key_filter,
+        use_karras=[True] * n_models,
+        karras_steps=[64] * n_models,
+        sigma_min=[1e-3] * n_models,
+        sigma_max=[120, 160][:n_models] if n_models > 1 else [120],
+        s_churn=[3, 0][:n_models] if n_models > 1 else [3],
     )
     
     return sampler
