@@ -32,7 +32,7 @@ from tqdm.auto import tqdm
 from pathlib import Path
 from collections import defaultdict
 from scipy.spatial import ConvexHull
-from scipy.ndimage import binary_erosion, generate_binary_structure
+from scipy.ndimage import binary_erosion, binary_dilation, binary_closing, binary_opening, generate_binary_structure
 
 # Add parent directory to path for point-e imports
 autocraft_dir = Path(__file__).parent
@@ -271,8 +271,22 @@ def extract_surface_voxels_convex_hull(coords, block_size):
         return voxel_grid
 
 
-def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface_only=False):
-    """Convert point cloud to occupied voxel coordinates using majority vote.
+def point_cloud_to_voxel_coords(
+    point_cloud, 
+    block_size=32, 
+    bounds=None, 
+    surface_only=False,
+    method='density',  # 'simple', 'density', 'morphological', 'surface_fill'
+    density_threshold=1,  # Minimum points per voxel for density method
+    fill_interior=False,  # Fill interior after surface extraction
+):
+    """Convert point cloud to occupied voxel coordinates using various downsampling methods.
+    
+    Methods:
+    - 'simple': Basic floor-based voxelization (any point marks voxel as occupied)
+    - 'density': Only mark voxels with >= density_threshold points (better for sparse clouds)
+    - 'morphological': Apply morphological operations to fill gaps and smooth surfaces
+    - 'surface_fill': Extract surface, then fill interior (creates solid blocky structures)
     
     Args:
         point_cloud: Point cloud object from point-e, or numpy array of shape (N, 3) with (x, y, z) coords
@@ -280,9 +294,12 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface
         bounds: Optional bounds tuple ((min_x, min_y, min_z), (max_x, max_y, max_z))
                 If None, auto-calculates from point cloud
         surface_only: If True, only return surface/outer voxels, removing interior voxels (default: False)
+        method: Downsampling method ('simple', 'density', 'morphological', 'surface_fill')
+        density_threshold: Minimum points per voxel for density method (default: 1)
+        fill_interior: If True, fill interior after surface extraction (default: False)
     
     Returns:
-        numpy array of shape (N, 3) with (y, z, x) coordinates centered at (0, 0, 0)
+        numpy array of shape (N, 3) with (y, z, x) coordinates in [0, block_size) range
         Format matches Minecraft/schematic format: (y, z, x) where y is height
     """
     # Extract coordinates from point cloud
@@ -314,7 +331,7 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface
     # Verify all coordinates are now positive (should be [0, block_size))
     assert np.all(coords_normalized >= 0), f"Some coordinates are still negative after shifting! Min: {coords_normalized.min()}"
     
-    # Extract surface using convex hull if requested (before voxelization)
+    # Apply different downsampling methods
     if surface_only:
         # Use convex hull to get only outer boundary points
         print(f"  Using convex hull to extract outer surface...")
@@ -322,20 +339,77 @@ def point_cloud_to_voxel_coords(point_cloud, block_size=32, bounds=None, surface
         total_points = len(coords_normalized)
         surface_voxels = voxel_grid.sum()
         print(f"  Convex hull: {surface_voxels} surface voxels from {total_points} points")
-    else:
-        # Create full voxel grid
+    elif method == 'simple':
+        # Simple floor-based voxelization (original method)
         voxel_grid = np.zeros((block_size, block_size, block_size), dtype=bool)
-        
         for i in range(len(coords_normalized)):
             x, y, z = coords_normalized[i]
-            # Convert to voxel indices
             x_idx = int(np.floor(x))
             y_idx = int(np.floor(y))
             z_idx = int(np.floor(z))
-            
-            # Bounds check
             if 0 <= x_idx < block_size and 0 <= y_idx < block_size and 0 <= z_idx < block_size:
                 voxel_grid[y_idx, z_idx, x_idx] = True
+        print(f"  Simple voxelization: {voxel_grid.sum()} occupied voxels from {len(coords_normalized)} points")
+    
+    elif method == 'density':
+        # Density-based: only mark voxels with enough points
+        voxel_counts = np.zeros((block_size, block_size, block_size), dtype=np.int32)
+        for i in range(len(coords_normalized)):
+            x, y, z = coords_normalized[i]
+            x_idx = int(np.floor(x))
+            y_idx = int(np.floor(y))
+            z_idx = int(np.floor(z))
+            if 0 <= x_idx < block_size and 0 <= y_idx < block_size and 0 <= z_idx < block_size:
+                voxel_counts[y_idx, z_idx, x_idx] += 1
+        voxel_grid = voxel_counts >= density_threshold
+        print(f"  Density-based (threshold={density_threshold}): {voxel_grid.sum()} occupied voxels from {len(coords_normalized)} points")
+    
+    elif method == 'morphological':
+        # Start with simple voxelization
+        voxel_grid = np.zeros((block_size, block_size, block_size), dtype=bool)
+        for i in range(len(coords_normalized)):
+            x, y, z = coords_normalized[i]
+            x_idx = int(np.floor(x))
+            y_idx = int(np.floor(y))
+            z_idx = int(np.floor(z))
+            if 0 <= x_idx < block_size and 0 <= y_idx < block_size and 0 <= z_idx < block_size:
+                voxel_grid[y_idx, z_idx, x_idx] = True
+        
+        # Apply morphological closing to fill small gaps (creates more blocky structure)
+        structure = generate_binary_structure(3, 1)  # 6-connected
+        voxel_grid = binary_closing(voxel_grid, structure=structure, iterations=1)
+        print(f"  Morphological (with closing): {voxel_grid.sum()} occupied voxels from {len(coords_normalized)} points")
+    
+    elif method == 'surface_fill':
+        # Extract surface first, then fill interior
+        # Step 1: Simple voxelization
+        voxel_grid = np.zeros((block_size, block_size, block_size), dtype=bool)
+        for i in range(len(coords_normalized)):
+            x, y, z = coords_normalized[i]
+            x_idx = int(np.floor(x))
+            y_idx = int(np.floor(y))
+            z_idx = int(np.floor(z))
+            if 0 <= x_idx < block_size and 0 <= y_idx < block_size and 0 <= z_idx < block_size:
+                voxel_grid[y_idx, z_idx, x_idx] = True
+        
+        # Step 2: Extract surface using erosion
+        structure = generate_binary_structure(3, 1)
+        eroded = binary_erosion(voxel_grid, structure=structure)
+        surface_mask = voxel_grid & ~eroded
+        
+        # Step 3: Fill interior (flood fill from surface)
+        if fill_interior:
+            # Use dilation to fill interior gaps
+            filled = binary_dilation(surface_mask, structure=structure, iterations=2)
+            # Keep only connected to surface (simple approach: dilate surface)
+            voxel_grid = filled
+            print(f"  Surface-fill: {voxel_grid.sum()} occupied voxels (surface + filled interior)")
+        else:
+            voxel_grid = surface_mask
+            print(f"  Surface-only: {voxel_grid.sum()} occupied voxels (surface only)")
+    
+    else:
+        raise ValueError(f"Unknown method: {method}. Choose from: 'simple', 'density', 'morphological', 'surface_fill'")
     
     # Get coordinates of occupied voxels
     occupied_positions = np.argwhere(voxel_grid)  # Shape: (N, 3) with indices (y, z, x)
@@ -444,6 +518,9 @@ def text_to_schematic_pipeline(
     config_path='mdlm/configs',
     point_e_base='base40M-textvec',
     surface_only=False,
+    voxel_method='density',  # 'simple', 'density', 'morphological', 'surface_fill'
+    density_threshold=1,  # Minimum points per voxel for density method
+    fill_interior=False,  # Fill interior after surface extraction
 ):
     """All-in-one pipeline: Text → Point Cloud → Voxel Grid → Block IDs → Schematic.
     
@@ -490,10 +567,14 @@ def text_to_schematic_pipeline(
     
     # Step 3: Convert to voxel coordinates
     print(f"\nStep 3/5: Converting point cloud to {block_size}x{block_size}x{block_size} voxel grid...")
+    print(f"  Using method: {voxel_method}")
     voxel_coords = point_cloud_to_voxel_coords(
         point_cloud, 
         block_size=block_size,
-        surface_only=surface_only
+        surface_only=surface_only,
+        method=voxel_method,
+        density_threshold=density_threshold,
+        fill_interior=fill_interior,
     )
     print(f"✓ Extracted {len(voxel_coords)} occupied voxels")
     
@@ -687,6 +768,24 @@ def main():
         action='store_true',
         help='Only keep surface/outer voxels, removing interior voxels (default: False)'
     )
+    parser.add_argument(
+        '--voxel_method',
+        type=str,
+        default='density',
+        choices=['simple', 'density', 'morphological', 'surface_fill'],
+        help='Voxelization method: simple (any point), density (threshold), morphological (fill gaps), surface_fill (surface+interior) (default: density)'
+    )
+    parser.add_argument(
+        '--density_threshold',
+        type=int,
+        default=1,
+        help='Minimum points per voxel for density method (default: 1)'
+    )
+    parser.add_argument(
+        '--fill_interior',
+        action='store_true',
+        help='Fill interior after surface extraction (only for surface_fill method) (default: False)'
+    )
     
     args = parser.parse_args()
     
@@ -711,6 +810,9 @@ def main():
             config_path=args.config_path,
             point_e_base=args.point_e_base,
             surface_only=args.surface_only,
+            voxel_method=args.voxel_method,
+            density_threshold=args.density_threshold,
+            fill_interior=args.fill_interior,
         )
         print(f"\nSuccess! Schematic saved to {args.output}")
     except Exception as e:
