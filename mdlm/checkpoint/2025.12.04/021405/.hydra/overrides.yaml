@@ -1,0 +1,3 @@
+- data=craft3d
+- data.craft3d_dir=dataset/3dcraft_clean
+- loader.global_batch_size=128

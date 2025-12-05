@@ -130,7 +130,7 @@ class LayerNorm(nn.Module):
     self.weight = nn.Parameter(torch.ones([dim]))
     self.dim = dim
   def forward(self, x):
-    with torch.cuda.amp.autocast(enabled=False):
+    with torch.amp.autocast('cuda', enabled=False):
       x = F.layer_norm(x.float(), [self.dim])
     return x * self.weight[None,None,:]
 
@@ -165,6 +165,7 @@ class TimestepEmbedder(nn.Module):
     """
     Create sinusoidal timestep embeddings.
     :param t: a 1-D Tensor of N indices, one per batch element.
+                      These may be fractional.
     :param dim: the dimension of the output.
     :param max_period: controls the minimum frequency of the embeddings.
     :return: an (N, D) Tensor of positional embeddings.
@@ -382,7 +383,7 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
 
     self.config = config
     self.vocab_size = vocab_size
-    self.coords = None
+
     self.vocab_embed = EmbeddingLayer(config.model.hidden_size,
                                       vocab_size)
     self.sigma_map = TimestepEmbedder(config.model.cond_dim)
@@ -410,22 +411,26 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
       return bias_dropout_add_scale_fused_train
     else:
       return  bias_dropout_add_scale_fused_inference
-  def forward(self, indices, sigma, coords=None):
+
+  def forward(self, indices, sigma, coords):
     # coords shape (batch_size, seq_len, 3)
     # indices shape (batch_size, seq_len)
+<<<<<<< HEAD
     if coords is not None:
         self.coords = coords
     #print("COORDINATES", self.coords.shape)
         
 
+=======
+>>>>>>> d648701e6a3819dfdaf2db72ef10eb05e8824ca5
     x = self.vocab_embed(indices) # shape (batch_size, seq_len, hidden_size)
-    pos_emb = self.pos_emb_3d(self.coords).to(x.dtype) # shape (batch_size, seq_len, hidden_size)
+    pos_emb = self.pos_emb_3d(coords).to(x.dtype) # shape (batch_size, seq_len, hidden_size)
     x = x + pos_emb
     c = F.silu(self.sigma_map(sigma))
 
     rotary_cos_sin = self.rotary_emb(x) # unused
 
-    with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+    with torch.amp.autocast('cuda', dtype=torch.bfloat16):
       for i in range(len(self.blocks)):
         x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
       x = self.output_layer(x, c)

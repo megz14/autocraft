@@ -1,21 +1,6 @@
-import functools
-import itertools
-import json
 import math
-import os
-import re
-import shutil
 import typing
-import urllib
-import zipfile
-
-import datasets
-import fsspec
-import requests
-import tokenizers
 import torch
-import transformers
-import h5py
 
 import utils
 from helper.craft3d_dataset import Craft3DDataset
@@ -23,6 +8,7 @@ from helper.craft3d_dataset import Craft3DDataset
 LOGGER = utils.get_logger(__name__)
 
 
+<<<<<<< HEAD
 def wt_detokenizer(string):
   # contractions
   string = string.replace("s '", "s'")
@@ -730,12 +716,73 @@ def get_tokenizer(config):
     tokenizer.eos_token = tokenizer.sep_token
   if tokenizer.pad_token is None:
     tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+=======
+def get_tokenizer(config):
+  """Get tokenizer for Craft3D data.
+  
+  For Craft3D, the tokenizer is mainly used to provide vocab_size and special token IDs.
+  Block IDs are used directly as token IDs without actual tokenization.
+  """
+  class MinimalTokenizer:
+    def __init__(self, vocab_size, pad_token_id, bos_token_id, eos_token_id, mask_token_id=None):
+      self.vocab_size = vocab_size
+      self.pad_token_id = pad_token_id
+      self.bos_token_id = bos_token_id
+      self.eos_token_id = eos_token_id
+      self.pad_token = '[PAD]'
+      self.bos_token = '[BOS]'
+      self.eos_token = '[EOS]'
+      if mask_token_id is not None:
+        self.mask_token_id = mask_token_id
+        self.mask_token = '[MASK]'
+      else:
+        self.mask_token_id = None
+        self.mask_token = None
+    
+    def decode(self, token_ids, skip_special_tokens=False):
+      """Decode token IDs to string representation.
+      
+      For Craft3D, tokens are block IDs. Returns a readable string representation.
+      """
+      if isinstance(token_ids, torch.Tensor):
+        token_ids = token_ids.cpu().tolist()
+      if not isinstance(token_ids, list):
+        token_ids = [token_ids]
+      
+      tokens = []
+      for token_id in token_ids:
+        if token_id == self.pad_token_id:
+          if not skip_special_tokens:
+            tokens.append('[PAD]')
+        elif token_id == self.bos_token_id:
+          if not skip_special_tokens:
+            tokens.append('[BOS]')
+        elif token_id == self.eos_token_id:
+          if not skip_special_tokens:
+            tokens.append('[EOS]')
+        elif self.mask_token_id is not None and token_id == self.mask_token_id:
+          if not skip_special_tokens:
+            tokens.append('[MASK]')
+        else:
+          tokens.append(f'block_{token_id}')
+      
+      return ' '.join(tokens)
+  
+  tokenizer = MinimalTokenizer(
+    vocab_size=getattr(config.data, 'vocab_size', 2048),
+    pad_token_id=getattr(config.data, 'pad_token_id', 0),
+    bos_token_id=getattr(config.data, 'bos_token_id', 0),
+    eos_token_id=getattr(config.data, 'eos_token_id', 0),
+    mask_token_id=getattr(config.data, 'mask_token_id', None)
+  )
+>>>>>>> d648701e6a3819dfdaf2db72ef10eb05e8824ca5
 
   return tokenizer
-    
+
 
 def get_dataloaders(config, tokenizer, skip_train=False,
                     skip_valid=False, valid_seed=None):
+  """Get dataloaders for Craft3D dataset."""
   num_gpus = torch.cuda.device_count()
   assert (config.loader.global_batch_size
           == (config.loader.batch_size
@@ -745,59 +792,44 @@ def get_dataloaders(config, tokenizer, skip_train=False,
   if config.loader.global_batch_size % (
     num_gpus * config.trainer.accumulate_grad_batches) != 0:
     raise ValueError(
-      f'Train Batch Size {config.training.batch_size}'
+      f'Train Batch Size {config.loader.batch_size}'
       f'not divisible by {num_gpus} gpus with accumulation '
       f'{config.trainer.accumulate_grad_batches}.')
   if config.loader.eval_global_batch_size % num_gpus != 0:
     raise ValueError(
-      f'Eval Batch Size for {config.eval.batch_size} '
+      f'Eval Batch Size {config.loader.eval_batch_size} '
       f'not divisible by {num_gpus}.')
+<<<<<<< HEAD
   data_type = getattr(config.data, "type", "default") # craft3d
+=======
+  
+  data_type = getattr(config.data, "type", "craft3d")
+  
+  if data_type != "craft3d":
+    raise ValueError(f"Only 'craft3d' data type is supported. Got: {data_type}")
+>>>>>>> d648701e6a3819dfdaf2db72ef10eb05e8824ca5
 
   if skip_train:
     train_set = None
   else:
-    if data_type == "craft3d":
-      train_set = Craft3DSequenceDataset(
-        data_dir=config.data.craft3d_dir,
-        split=getattr(config.data, "train_split", "train"),
-        seq_len=config.model.length,
-        pad_token_id=_get_pad_token_id(tokenizer),
-        max_samples=getattr(config.data, "max_train_samples", None),
-      )
-    else:
-      train_set = get_dataset(
-        config.data.train,
-        tokenizer,
-        mode='train',
-        wrap=config.data.wrap,
-        cache_dir=config.data.cache_dir,
-        block_size=config.model.length)
+    train_set = Craft3DSequenceDataset(
+      data_dir=config.data.craft3d_dir,
+      split=getattr(config.data, "train_split", "train"),
+      seq_len=config.model.length,
+      pad_token_id=_get_pad_token_id(tokenizer),
+      max_samples=getattr(config.data, "max_train_samples", None),
+    )
   
-  if config.data.valid in ['text8', 'lm1b', 'ag_news']:
-    validation_split = 'test'
-  else:
-    validation_split = 'validation'
   if skip_valid:
     valid_set = None
   else:
-    if data_type == "craft3d":
-      valid_set = Craft3DSequenceDataset(
-        data_dir=config.data.craft3d_dir,
-        split=getattr(config.data, "valid_split", "val"),
-        seq_len=config.model.length,
-        pad_token_id=_get_pad_token_id(tokenizer),
-        max_samples=getattr(config.data, "max_valid_samples", None),
-      )
-    else:
-      valid_set = get_dataset(
-        config.data.valid,
-        tokenizer,
-        wrap=config.data.wrap,
-        mode=validation_split,
-        cache_dir=config.data.cache_dir,
-        block_size=config.model.length,
-        streaming=False)
+    valid_set = Craft3DSequenceDataset(
+      data_dir=config.data.craft3d_dir,
+      split=getattr(config.data, "valid_split", "val"),
+      seq_len=config.model.length,
+      pad_token_id=_get_pad_token_id(tokenizer),
+      max_samples=getattr(config.data, "max_valid_samples", None),
+    )
 
   if skip_train:
     train_loader = None
@@ -807,9 +839,14 @@ def get_dataloaders(config, tokenizer, skip_train=False,
       batch_size=config.loader.batch_size,
       num_workers=config.loader.num_workers,
       pin_memory=config.loader.pin_memory,
+<<<<<<< HEAD
       shuffle=not config.data.streaming,
       persistent_workers=True,
         drop_last=True)
+=======
+      shuffle=True,
+      persistent_workers=True)
+>>>>>>> d648701e6a3819dfdaf2db72ef10eb05e8824ca5
     train_loader.tokenizer = tokenizer
   if skip_valid:
     valid_loader = None
@@ -826,25 +863,32 @@ def get_dataloaders(config, tokenizer, skip_train=False,
       num_workers=config.loader.num_workers,
       pin_memory=config.loader.pin_memory,
       shuffle=shuffle_valid,
+<<<<<<< HEAD
       generator=generator,
     drop_last=True)
     # Will be used in generative perplexity calculation
+=======
+      generator=generator)
+>>>>>>> d648701e6a3819dfdaf2db72ef10eb05e8824ca5
     valid_loader.tokenizer = tokenizer
 
   return train_loader, valid_loader
 
 
 def _get_pad_token_id(tokenizer):
+  """Get pad token ID from tokenizer or config."""
   if tokenizer is None:
     return 0
-  if tokenizer.pad_token_id is not None:
+  if hasattr(tokenizer, 'pad_token_id') and tokenizer.pad_token_id is not None:
     return tokenizer.pad_token_id
-  if tokenizer.eos_token_id is not None:
+  if hasattr(tokenizer, 'eos_token_id') and tokenizer.eos_token_id is not None:
     return tokenizer.eos_token_id
   return 0
 
 
 class Craft3DSequenceDataset(torch.utils.data.Dataset):
+  """Dataset for Craft3D sequences with padding."""
+  
   def __init__(self, data_dir, split, seq_len, pad_token_id=0, max_samples=None):
     self.dataset = Craft3DDataset(
       data_dir=data_dir,
@@ -983,5 +1027,3 @@ class FaultTolerantDistributedSampler(torch.utils.data.DistributedSampler):
       yield index
 
     self.counter = 0
-  
-

@@ -52,6 +52,10 @@ eval:
   compute_perplexity_on_sanity: False
   gen_ppl_eval_model_name_or_path: gpt2-large  # gpt2-large, meta-llama/Llama-2-7b-hf
   generate_samples: True
+  sample_from_train: False  # If True, sample from training set; if False, sample from validation set
+  batch_index: null  # If set, use this specific batch index (0-based). If null, randomly select a batch.
+  sample_index_in_batch: null  # If set, use only this sample index from the batch (0-based). If null, use all samples up to eval_batch_size.
+  coordinate_file: null  # Path to schematic.npy file to load coordinates from. If set, uses coordinates from this file instead of dataset.
 
 optim:
   weight_decay: 0
@@ -73,7 +77,11 @@ trainer:
   log_every_n_steps: 10
   limit_train_batches: 1.0   # train on full dataset, can be used to toggle quick run
   limit_val_batches: 1.0     # validate on full dataset, can be used to toggle quick run
+<<<<<<< HEAD
   val_check_interval: 54
+=======
+  check_val_every_n_epoch: 10  # validate every epoch (for small datasets)
+>>>>>>> d648701e6a3819dfdaf2db72ef10eb05e8824ca5
 
 wandb:
   project: text-diffusion
