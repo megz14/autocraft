@@ -316,7 +316,7 @@ def load_diffusion_model(checkpoint_path, config_path='mdlm/configs', config_ove
     with hydra.initialize_config_dir(config_dir=config_dir_abs, version_base=None):
         overrides = [
             'data=craft3d',
-            f'eval.checkpoint_path={checkpoint_path}',
+            f'eval.checkpoint_path="{checkpoint_path}"',  # Quote path to handle special characters
         ]
         if config_overrides:
             overrides.extend(config_overrides)
