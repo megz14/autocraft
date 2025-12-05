@@ -13,7 +13,7 @@ Text-to-Minecraft structure generation using two-stage diffusion models.
 
 1. **Clone the repository:**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/megz14/autocraft.git
    cd autocraft
    ```
 
@@ -55,10 +55,10 @@ python main.py \
   --text "a house" \
   --checkpoint_path="./mdlm/checkpoint/2025.12.04/021405/checkpoints/best.ckpt" \
   --output="house.npy" \
-  --block_size=32
+  --block_size=16
 ```
 
-Note: Both relative and absolute paths are supported for `--checkpoint_path`. The `--block_size` parameter controls the voxel grid resolution (default: 32).
+Note: Both relative and absolute paths are supported for `--checkpoint_path`. The `--block_size` parameter controls the voxel grid resolution (default: 16).
 
 ### Visualization Setup (MineScript)
 
