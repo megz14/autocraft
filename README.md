@@ -1,6 +1,4 @@
-# AutoCraft: Diffusion-Based Minecraft Structure Generation from Natural Languag
-
-Text-to-Minecraft structure generation using two-stage diffusion models.
+# AutoCraft: Diffusion-Based Minecraft Structure Generation from Natural Language
 
 ## Setup
 
