@@ -143,8 +143,7 @@ You can now use this script in-game to load and visualize generated `.npy` schem
 
 Replace `/absolute/path/to/autocraft` with the actual absolute path to your cloned repository.
 
-https://github.com/user-attachments/assets/498e6c49-48c3-4268-b5fd-0f11361bb161
-
+https://github.com/user-attachments/assets/4448f0eb-7d05-4419-9e18-357dcc9f0166
 
 ## Results
 
