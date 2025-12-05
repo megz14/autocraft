@@ -312,27 +312,29 @@ def load_diffusion_model(checkpoint_path, config_path='mdlm/configs', config_ove
     # Convert to absolute path
     config_dir_abs = str(config_dir.resolve())
     
-    # Load config using initialize_config_dir (accepts absolute paths)
-    with hydra.initialize_config_dir(config_dir=config_dir_abs, version_base=None):
-        overrides = [
-            'data=craft3d',
-            f'eval.checkpoint_path="{checkpoint_path}"',  # Quote path to handle special characters
-        ]
-        if config_overrides:
-            overrides.extend(config_overrides)
-        
-        config = hydra.compose(config_name='config', overrides=overrides)
-    
-    # Get tokenizer
-    tokenizer = dataloader.get_tokenizer(config)
-    
-    # Resolve checkpoint path to absolute
+    # Resolve checkpoint path to absolute first
     if os.path.isabs(checkpoint_path):
         checkpoint_path_abs = str(Path(checkpoint_path).resolve())
     else:
         # Resolve relative to script directory
         checkpoint_path_abs = str(Path(script_dir) / checkpoint_path)
         checkpoint_path_abs = str(Path(checkpoint_path_abs).resolve())
+    
+    # Load config using initialize_config_dir (accepts absolute paths)
+    with hydra.initialize_config_dir(config_dir=config_dir_abs, version_base=None):
+        overrides = [
+            'data=craft3d',
+        ]
+        if config_overrides:
+            overrides.extend(config_overrides)
+        
+        config = hydra.compose(config_name='config', overrides=overrides)
+    
+    # Set checkpoint path directly on config (avoid Hydra parsing issues with paths)
+    config.eval.checkpoint_path = checkpoint_path_abs
+    
+    # Get tokenizer
+    tokenizer = dataloader.get_tokenizer(config)
     
     # Load model
     model = diffusion.Diffusion.load_from_checkpoint(
