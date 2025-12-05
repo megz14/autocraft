@@ -1,4 +1,5 @@
-# AutoCraft: Diffusion-Based Minecraft Structure Generation from Natural Language
+# AutoCraft
+a Diffusion-Based Minecraft Structure Generation from Natural Language
 
 ## Setup
 
