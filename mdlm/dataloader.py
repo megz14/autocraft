@@ -1,8 +1,6 @@
 import math
-import os
 import typing
 import torch
-import transformers
 
 import utils
 from helper.craft3d_dataset import Craft3DDataset
@@ -16,119 +14,58 @@ def get_tokenizer(config):
   For Craft3D, the tokenizer is mainly used to provide vocab_size and special token IDs.
   Block IDs are used directly as token IDs without actual tokenization.
   """
-  # For Craft3D, we can use a simple tokenizer or create a minimal one
-  # The tokenizer mainly needs to provide vocab_size and special token IDs
-  if hasattr(config.data, 'tokenizer_name_or_path'):
-    try:
-      tokenizer = transformers.AutoTokenizer.from_pretrained(
-        config.data.tokenizer_name_or_path)
-    except:
-      # Fallback: create a minimal tokenizer-like object
-      class MinimalTokenizer:
-        def __init__(self, vocab_size, pad_token_id, bos_token_id, eos_token_id):
-          self.vocab_size = vocab_size
-          self.pad_token_id = pad_token_id
-          self.bos_token_id = bos_token_id
-          self.eos_token_id = eos_token_id
-          self.pad_token = '[PAD]'
-          self.bos_token = '[BOS]'
-          self.eos_token = '[EOS]'
-          if hasattr(config.data, 'mask_token_id'):
-            self.mask_token_id = config.data.mask_token_id
-            self.mask_token = '[MASK]'
-          else:
-            self.mask_token_id = None
-            self.mask_token = None
-        
-        def decode(self, token_ids, skip_special_tokens=False):
-          """Decode token IDs to string representation.
-          
-          For Craft3D, tokens are block IDs. Returns a readable string representation.
-          """
-          if isinstance(token_ids, torch.Tensor):
-            token_ids = token_ids.cpu().tolist()
-          if not isinstance(token_ids, list):
-            token_ids = [token_ids]
-          
-          tokens = []
-          for token_id in token_ids:
-            if token_id == self.pad_token_id:
-              if not skip_special_tokens:
-                tokens.append('[PAD]')
-            elif token_id == self.bos_token_id:
-              if not skip_special_tokens:
-                tokens.append('[BOS]')
-            elif token_id == self.eos_token_id:
-              if not skip_special_tokens:
-                tokens.append('[EOS]')
-            elif self.mask_token_id is not None and token_id == self.mask_token_id:
-              if not skip_special_tokens:
-                tokens.append('[MASK]')
-            else:
-              tokens.append(f'block_{token_id}')
-          
-          return ' '.join(tokens)
-      
-      tokenizer = MinimalTokenizer(
-        vocab_size=getattr(config.data, 'vocab_size', 2048),
-        pad_token_id=getattr(config.data, 'pad_token_id', 0),
-        bos_token_id=getattr(config.data, 'bos_token_id', 0),
-        eos_token_id=getattr(config.data, 'eos_token_id', 0)
-      )
-  else:
-    # Use config values directly
-    class MinimalTokenizer:
-      def __init__(self, vocab_size, pad_token_id, bos_token_id, eos_token_id, mask_token_id=None):
-        self.vocab_size = vocab_size
-        self.pad_token_id = pad_token_id
-        self.bos_token_id = bos_token_id
-        self.eos_token_id = eos_token_id
-        self.pad_token = '[PAD]'
-        self.bos_token = '[BOS]'
-        self.eos_token = '[EOS]'
-        if mask_token_id is not None:
-          self.mask_token_id = mask_token_id
-          self.mask_token = '[MASK]'
-        else:
-          self.mask_token_id = None
-          self.mask_token = None
-      
-      def decode(self, token_ids, skip_special_tokens=False):
-        """Decode token IDs to string representation.
-        
-        For Craft3D, tokens are block IDs. Returns a readable string representation.
-        """
-        if isinstance(token_ids, torch.Tensor):
-          token_ids = token_ids.cpu().tolist()
-        if not isinstance(token_ids, list):
-          token_ids = [token_ids]
-        
-        tokens = []
-        for token_id in token_ids:
-          if token_id == self.pad_token_id:
-            if not skip_special_tokens:
-              tokens.append('[PAD]')
-          elif token_id == self.bos_token_id:
-            if not skip_special_tokens:
-              tokens.append('[BOS]')
-          elif token_id == self.eos_token_id:
-            if not skip_special_tokens:
-              tokens.append('[EOS]')
-          elif self.mask_token_id is not None and token_id == self.mask_token_id:
-            if not skip_special_tokens:
-              tokens.append('[MASK]')
-          else:
-            tokens.append(f'block_{token_id}')
-        
-        return ' '.join(tokens)
+  class MinimalTokenizer:
+    def __init__(self, vocab_size, pad_token_id, bos_token_id, eos_token_id, mask_token_id=None):
+      self.vocab_size = vocab_size
+      self.pad_token_id = pad_token_id
+      self.bos_token_id = bos_token_id
+      self.eos_token_id = eos_token_id
+      self.pad_token = '[PAD]'
+      self.bos_token = '[BOS]'
+      self.eos_token = '[EOS]'
+      if mask_token_id is not None:
+        self.mask_token_id = mask_token_id
+        self.mask_token = '[MASK]'
+      else:
+        self.mask_token_id = None
+        self.mask_token = None
     
-    tokenizer = MinimalTokenizer(
-      vocab_size=getattr(config.data, 'vocab_size', 2048),
-      pad_token_id=getattr(config.data, 'pad_token_id', 0),
-      bos_token_id=getattr(config.data, 'bos_token_id', 0),
-      eos_token_id=getattr(config.data, 'eos_token_id', 0),
-      mask_token_id=getattr(config.data, 'mask_token_id', None)
-    )
+    def decode(self, token_ids, skip_special_tokens=False):
+      """Decode token IDs to string representation.
+      
+      For Craft3D, tokens are block IDs. Returns a readable string representation.
+      """
+      if isinstance(token_ids, torch.Tensor):
+        token_ids = token_ids.cpu().tolist()
+      if not isinstance(token_ids, list):
+        token_ids = [token_ids]
+      
+      tokens = []
+      for token_id in token_ids:
+        if token_id == self.pad_token_id:
+          if not skip_special_tokens:
+            tokens.append('[PAD]')
+        elif token_id == self.bos_token_id:
+          if not skip_special_tokens:
+            tokens.append('[BOS]')
+        elif token_id == self.eos_token_id:
+          if not skip_special_tokens:
+            tokens.append('[EOS]')
+        elif self.mask_token_id is not None and token_id == self.mask_token_id:
+          if not skip_special_tokens:
+            tokens.append('[MASK]')
+        else:
+          tokens.append(f'block_{token_id}')
+      
+      return ' '.join(tokens)
+  
+  tokenizer = MinimalTokenizer(
+    vocab_size=getattr(config.data, 'vocab_size', 2048),
+    pad_token_id=getattr(config.data, 'pad_token_id', 0),
+    bos_token_id=getattr(config.data, 'bos_token_id', 0),
+    eos_token_id=getattr(config.data, 'eos_token_id', 0),
+    mask_token_id=getattr(config.data, 'mask_token_id', None)
+  )
 
   return tokenizer
 
@@ -207,7 +144,6 @@ def get_dataloaders(config, tokenizer, skip_train=False,
       pin_memory=config.loader.pin_memory,
       shuffle=shuffle_valid,
       generator=generator)
-    # Will be used in generative perplexity calculation
     valid_loader.tokenizer = tokenizer
 
   return train_loader, valid_loader
