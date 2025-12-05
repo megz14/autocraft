@@ -1,0 +1,307 @@
+wandb_version: 1
+
+T:
+  desc: null
+  value: 0
+_wandb:
+  desc: null
+  value:
+    cli_version: 0.13.5
+    framework: huggingface
+    huggingface_version: 4.38.2
+    is_jupyter_run: false
+    is_kaggle_kernel: false
+    m:
+    - 1: trainer/global_step
+      6:
+      - 3
+    - 1: trainer/lr
+      5: 1
+      6:
+      - 1
+    - 1: trainer/loss
+      5: 1
+      6:
+      - 1
+    - 1: epoch
+      5: 1
+      6:
+      - 1
+    - 1: train/bpd
+      5: 1
+      6:
+      - 1
+    - 1: train/nll
+      5: 1
+      6:
+      - 1
+    - 1: train/ppl
+      5: 1
+      6:
+      - 1
+    - 1: val/bpd
+      5: 1
+      6:
+      - 1
+    - 1: val/nll
+      5: 1
+      6:
+      - 1
+    - 1: val/ppl
+      5: 1
+      6:
+      - 1
+    python_version: 3.9.25
+    start_time: 1764814487.343946
+    t:
+      1:
+      - 1
+      - 11
+      - 41
+      - 49
+      - 50
+      - 55
+      - 63
+      2:
+      - 1
+      - 11
+      - 41
+      - 49
+      - 50
+      - 55
+      - 63
+      3:
+      - 5
+      - 7
+      - 14
+      - 15
+      - 16
+      - 23
+      4: 3.9.25
+      5: 0.13.5
+      6: 4.38.2
+      8:
+      - 5
+backbone:
+  desc: null
+  value: dit
+callbacks:
+  desc: null
+  value:
+    checkpoint_every_n_steps:
+      _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      auto_insert_metric_name: false
+      dirpath: /workspace/autocraft/autocraft/mdlm/outputs/craft3d_train/2025.12.04/021405/checkpoints
+      every_n_train_steps: 500
+      save_last: true
+      save_top_k: -1
+      verbose: true
+    checkpoint_monitor:
+      _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      auto_insert_metric_name: false
+      dirpath: /workspace/autocraft/autocraft/mdlm/outputs/craft3d_train/2025.12.04/021405/checkpoints
+      filename: best
+      mode: min
+      monitor: val/nll
+      save_last: false
+      save_top_k: 1
+      verbose: true
+    learning_rate_monitor:
+      _target_: lightning.pytorch.callbacks.LearningRateMonitor
+      logging_interval: step
+checkpointing:
+  desc: null
+  value:
+    resume_ckpt_path: /workspace/autocraft/autocraft/mdlm/outputs/craft3d_train/2025.12.04/021405/checkpoints/last.ckpt
+    resume_from_ckpt: true
+    save_dir: /workspace/autocraft/autocraft/mdlm/outputs/craft3d_train/2025.12.04/021405
+config:
+  desc: null
+  value: '{''mode'': ''train'', ''diffusion'': ''absorbing_state'', ''backbone'':
+    ''dit'', ''parameterization'': ''subs'', ''time_conditioning'': True, ''T'': 0,
+    ''subs_masking'': False, ''seed'': 1, ''loader'': {''global_batch_size'': 128,
+    ''eval_global_batch_size'': ''${.global_batch_size}'', ''batch_size'': ''${div_up:${.global_batch_size},
+    ${eval:${trainer.devices} * ${trainer.num_nodes}}}'', ''eval_batch_size'': ''${div_up:${.eval_global_batch_size},
+    ${eval:${trainer.devices} * ${trainer.num_nodes}}}'', ''num_workers'': ''${eval:"len(__import__(\''os\'').sched_getaffinity(0))"}'',
+    ''pin_memory'': True}, ''sampling'': {''predictor'': ''ddpm_cache'', ''steps'':
+    128, ''noise_removal'': True, ''num_sample_batches'': 2, ''num_sample_log'': 2,
+    ''semi_ar'': False, ''stride_length'': 1, ''num_strides'': 1}, ''training'': {''ema'':
+    0.9999, ''antithetic_sampling'': True, ''importance_sampling'': False, ''sampling_eps'':
+    0.001, ''change_of_variables'': False}, ''eval'': {''checkpoint_path'': '''',
+    ''disable_ema'': False, ''compute_generative_perplexity'': False, ''perplexity_batch_size'':
+    8, ''compute_perplexity_on_sanity'': False, ''gen_ppl_eval_model_name_or_path'':
+    ''gpt2-large'', ''generate_samples'': True, ''sample_from_train'': False, ''batch_index'':
+    None, ''sample_index_in_batch'': None, ''coordinate_file'': None}, ''optim'':
+    {''weight_decay'': 0, ''lr'': 0.0003, ''beta1'': 0.9, ''beta2'': 0.999, ''eps'':
+    1e-08}, ''trainer'': {''_target_'': ''lightning.Trainer'', ''accelerator'': ''cuda'',
+    ''num_nodes'': 1, ''devices'': ''${device_count:}'', ''accumulate_grad_batches'':
+    ''${div_up:${loader.global_batch_size}, ${eval:${trainer.devices} * ${loader.batch_size}
+    * ${trainer.num_nodes}}}'', ''gradient_clip_val'': 1.0, ''precision'': ''bf16'',
+    ''num_sanity_val_steps'': 2, ''max_steps'': 1000000, ''log_every_n_steps'': 10,
+    ''limit_train_batches'': 1.0, ''limit_val_batches'': 1.0, ''check_val_every_n_epoch'':
+    10}, ''wandb'': {''project'': ''text-diffusion'', ''notes'': ''Mulan for text'',
+    ''group'': None, ''job_type'': None, ''name'': None, ''id'': ''${.name}_${seed}'',
+    ''tags'': [''${noise.type}'', ''${data.train}'', ''${data.valid}'']}, ''checkpointing'':
+    {''save_dir'': ''${cwd:}'', ''resume_from_ckpt'': True, ''resume_ckpt_path'':
+    ''${.save_dir}/checkpoints/last.ckpt''}, ''callbacks'': {''checkpoint_every_n_steps'':
+    {''_target_'': ''lightning.pytorch.callbacks.ModelCheckpoint'', ''save_top_k'':
+    -1, ''save_last'': True, ''dirpath'': ''${checkpointing.save_dir}/checkpoints'',
+    ''verbose'': True, ''auto_insert_metric_name'': False, ''every_n_train_steps'':
+    500}, ''checkpoint_monitor'': {''_target_'': ''lightning.pytorch.callbacks.ModelCheckpoint'',
+    ''monitor'': ''val/nll'', ''mode'': ''min'', ''save_top_k'': 1, ''save_last'':
+    False, ''dirpath'': ''${checkpointing.save_dir}/checkpoints'', ''filename'': ''best'',
+    ''auto_insert_metric_name'': False, ''verbose'': True}, ''learning_rate_monitor'':
+    {''_target_'': ''lightning.pytorch.callbacks.LearningRateMonitor'', ''logging_interval'':
+    ''step''}}, ''data'': {''type'': ''craft3d'', ''train'': ''craft3d_train'', ''valid'':
+    ''craft3d_val'', ''craft3d_dir'': ''dataset/3dcraft_clean'', ''train_split'':
+    ''train'', ''valid_split'': ''val'', ''vocab_size'': 45, ''pad_token_id'': 0,
+    ''bos_token_id'': 0, ''eos_token_id'': 0, ''mask_token_id'': 44}, ''model'': {''name'':
+    ''small'', ''type'': ''ddit'', ''hidden_size'': 64, ''cond_dim'': 128, ''length'':
+    1024, ''n_blocks'': 12, ''n_heads'': 8, ''scale_by_sigma'': True, ''dropout'':
+    0.1, ''tie_word_embeddings'': False}, ''strategy'': {''_target_'': ''lightning.pytorch.strategies.DDPStrategy'',
+    ''find_unused_parameters'': False}, ''noise'': {''type'': ''loglinear'', ''sigma_min'':
+    0.0001, ''sigma_max'': 20}, ''lr_scheduler'': {''_target_'': ''transformers.get_constant_schedule_with_warmup'',
+    ''num_warmup_steps'': 2500}}'
+data:
+  desc: null
+  value:
+    bos_token_id: 0
+    craft3d_dir: dataset/3dcraft_clean
+    eos_token_id: 0
+    mask_token_id: 44
+    pad_token_id: 0
+    train: craft3d_train
+    train_split: train
+    type: craft3d
+    valid: craft3d_val
+    valid_split: val
+    vocab_size: 45
+diffusion:
+  desc: null
+  value: absorbing_state
+eval:
+  desc: null
+  value:
+    batch_index: null
+    checkpoint_path: ''
+    compute_generative_perplexity: false
+    compute_perplexity_on_sanity: false
+    coordinate_file: null
+    disable_ema: false
+    gen_ppl_eval_model_name_or_path: gpt2-large
+    generate_samples: true
+    perplexity_batch_size: 8
+    sample_from_train: false
+    sample_index_in_batch: null
+loader:
+  desc: null
+  value:
+    batch_size: 128
+    eval_batch_size: 128
+    eval_global_batch_size: 128
+    global_batch_size: 128
+    num_workers: 96
+    pin_memory: true
+lr_scheduler:
+  desc: null
+  value:
+    _target_: transformers.get_constant_schedule_with_warmup
+    num_warmup_steps: 2500
+mode:
+  desc: null
+  value: train
+model:
+  desc: null
+  value:
+    cond_dim: 128
+    dropout: 0.1
+    hidden_size: 64
+    length: 1024
+    n_blocks: 12
+    n_heads: 8
+    name: small
+    scale_by_sigma: true
+    tie_word_embeddings: false
+    type: ddit
+noise:
+  desc: null
+  value:
+    sigma_max: 20
+    sigma_min: 0.0001
+    type: loglinear
+optim:
+  desc: null
+  value:
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-08
+    lr: 0.0003
+    weight_decay: 0
+parameterization:
+  desc: null
+  value: subs
+sampling:
+  desc: null
+  value:
+    noise_removal: true
+    num_sample_batches: 2
+    num_sample_log: 2
+    num_strides: 1
+    predictor: ddpm_cache
+    semi_ar: false
+    steps: 128
+    stride_length: 1
+seed:
+  desc: null
+  value: 1
+strategy:
+  desc: null
+  value:
+    _target_: lightning.pytorch.strategies.DDPStrategy
+    find_unused_parameters: false
+subs_masking:
+  desc: null
+  value: false
+time_conditioning:
+  desc: null
+  value: true
+tokenizer:
+  desc: null
+  value: <dataloader.get_tokenizer.<locals>.MinimalTokenizer object at 0x799256fef6d0>
+trainer:
+  desc: null
+  value:
+    _target_: lightning.Trainer
+    accelerator: cuda
+    accumulate_grad_batches: 1
+    check_val_every_n_epoch: 10
+    devices: 1
+    gradient_clip_val: 1.0
+    limit_train_batches: 1.0
+    limit_val_batches: 1.0
+    log_every_n_steps: 10
+    max_steps: 1000000
+    num_nodes: 1
+    num_sanity_val_steps: 2
+    precision: bf16
+training:
+  desc: null
+  value:
+    antithetic_sampling: true
+    change_of_variables: false
+    ema: 0.9999
+    importance_sampling: false
+    sampling_eps: 0.001
+wandb:
+  desc: null
+  value:
+    group: null
+    id: None_1
+    job_type: null
+    name: null
+    notes: Mulan for text
+    project: text-diffusion
+    tags:
+    - loglinear
+    - craft3d_train
+    - craft3d_val
